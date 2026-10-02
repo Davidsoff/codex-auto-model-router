@@ -67,6 +67,8 @@ for line in ui_text.splitlines():
         values[key] = value.strip().strip('"')
 if not 25 <= len(values.get("short_description", "")) <= 64:
     fail("openai.yaml short_description length is invalid")
+if not values.get("short_description", "").isascii():
+    fail("openai.yaml short_description must be English")
 if "$codex-auto-model-router" not in values.get("default_prompt", ""):
     fail("openai.yaml default prompt does not invoke the skill")
 if "Codex auto route | Task: <name> | Recommendation: <model>/<effort> | Execution: current coordinator <model>/<effort> | No automatic switch: <execution_reason>" not in skill_text:
@@ -77,6 +79,35 @@ if "main conversation model is fixed; leaf startup cost exceeds expected benefit
     fail("local execution notice is missing the root cold-start explanation")
 if "in the language of the user's current request" not in skill_text:
     fail("routing notices do not follow the current request language")
+for notice_contract in (
+    "Planned executor: leaf agent <model>/<effort>",
+    "Do not say `Execution: leaf agent` until the spawn or reuse call has successfully acknowledged",
+    "Before every spawn, including single and parallel dispatch",
+    "^[a-z0-9][a-z0-9_]{0,47}$",
+    "pipeline_workflows",
+):
+    if notice_contract not in skill_text:
+        fail(f"spawn notice or naming contract is missing: {notice_contract}")
+for documentation, label, required_phrases in (
+    (
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        "README.md",
+        ("planned executor", "^[a-z0-9][a-z0-9_]{0,47}$", "pipeline_workflows"),
+    ),
+    (
+        (ROOT / "README.zh-CN.md").read_text(encoding="utf-8"),
+        "README.zh-CN.md",
+        ("计划执行器", "^[a-z0-9][a-z0-9_]{0,47}$", "pipeline_workflows"),
+    ),
+    (
+        (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+        "AGENTS.md",
+        ("Planned executor", "^[a-z0-9][a-z0-9_]{0,47}$", "pipeline_workflows"),
+    ),
+):
+    for phrase in required_phrases:
+        if phrase not in documentation:
+            fail(f"spawn naming or notice contract is missing from {label}: {phrase}")
 for obsolete_segment_counter in (
     "Segment <index>/<total>",
     "Segment 1/1",

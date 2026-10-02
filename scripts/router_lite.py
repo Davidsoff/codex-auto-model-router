@@ -426,6 +426,8 @@ def _decision(args, task=None, current=None):
         "spawn_contract": (
             None if agent_type is None else {
                 "agent_type": agent_type,
+                "task_name_pattern": policy.AGENT_TASK_NAME_RE.pattern,
+                "validate_task_name_before_spawn": True,
                 "fork_turns": "none",
                 "retry_on_contract_error": False,
                 "request_escalated_permissions": False,

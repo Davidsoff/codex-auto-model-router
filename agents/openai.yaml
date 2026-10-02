@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Auto Model Router"
-  short_description: "自动选择 GPT-6 模型路由，支持项目级退出与恢复"
+  short_description: "Route GPT-6 work automatically with project-level controls"
   default_prompt: "Use $codex-auto-model-router to choose the lowest sufficient route from the GPT-6 model catalog, honor project-level exit settings, prefer safe direct tool concurrency, and explain why execution stays on the current coordinator when no model-specific leaf is used."

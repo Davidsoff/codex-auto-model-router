@@ -110,6 +110,11 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(result["action"], "delegate")
         self.assertEqual(result["agent_type"], "codex_auto_model_executor_gpt6_luna")
         self.assertEqual(result["spawn_contract"]["fork_turns"], "none")
+        self.assertEqual(
+            result["spawn_contract"]["task_name_pattern"],
+            r"^[a-z0-9][a-z0-9_]{0,47}$",
+        )
+        self.assertTrue(result["spawn_contract"]["validate_task_name_before_spawn"])
         self.assertFalse(result["spawn_contract"]["retry_on_contract_error"])
         self.assertTrue(result["record_contract"]["required_after_execution"])
         self.assertEqual(result["subagent_policy"]["mode"], "automatic-benefit-gated")

@@ -130,7 +130,7 @@ The graph's full effort estimates and limitations are recorded in [benchmark evi
 
 See [benchmark evidence](references/benchmark-evidence.md) and the [machine-readable snapshot](references/benchmark-evidence.json). The snapshot is optional at runtime; missing, invalid, or stale evidence falls back to deterministic rules without blocking work.
 
-Only observed execution is recorded; a recommendation is never written as actual model use. Benefit-gated subagent mode returns a machine-readable spawn contract: an explicit executor type must use `fork_turns="none"`, and a contract mismatch falls back locally without retry. History never becomes a prerequisite for the project result.
+Only observed execution is recorded; a recommendation is never written as actual model use. Before a spawn is acknowledged, routing notices label the leaf as the planned executor; `Execution: leaf agent` is shown only after successful creation or reuse. Before every single or parallel spawn, validate `task_name` against `^[a-z0-9][a-z0-9_]{0,47}$` (lowercase letters, digits, and underscores; for example, `pipeline_workflows`). The machine-readable spawn contract includes this naming rule and requires `fork_turns="none"`; a contract mismatch falls back locally without retry. History never becomes a prerequisite for the project result.
 
 ## Development
 
