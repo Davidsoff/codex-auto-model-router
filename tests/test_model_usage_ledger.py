@@ -70,13 +70,13 @@ class LedgerTests(unittest.TestCase):
 
     def capability_decision(self):
         return {
-            "schema_version": 1, "verified": True,
+            "schema_version": 2, "verified": True,
             "source": LEDGER.CAPABILITY_DECISION_SOURCE,
             "route_id": "route-1", "plan_hash": "plan-1",
             "segment_id": "one", "attempt_id": "attempt-one",
             "target_model": "gpt-5.6-sol", "target_effort": "medium",
             "execution_model": "gpt-5.5", "execution_effort": "medium",
-            "reason": "gpt56-family-unavailable",
+            "reason": "gpt6-and-gpt56-families-unavailable",
             "availability_complete": True, "available_models": ["gpt-5.5"],
         }
 
@@ -810,7 +810,7 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(events, legacy_events)
         self.assertEqual(warnings, [])
 
-    def test_new_gpt55_execution_requires_family_unavailable_reason_but_legacy_reads(self):
+    def test_new_gpt55_availability_fallback_is_rejected_but_legacy_reads(self):
         decision = self.capability_decision()
         event = {
             "event": "execution", "model": "gpt-5.5", "effort": "medium",
@@ -819,16 +819,17 @@ class LedgerTests(unittest.TestCase):
             "plan_hash": "plan-1", "segment_id": "one", "attempt_id": "attempt-one",
             "fallback_from": "gpt-5.6-sol",
         }
-        with self.assertRaisesRegex(ValueError, "gpt56-family-unavailable"):
+        with self.assertRaisesRegex(ValueError, "availability fallback is no longer supported"):
             LEDGER.append_event(self.ledger, event.copy())
-        with self.assertRaisesRegex(ValueError, "capability_decision"):
+        with self.assertRaisesRegex(ValueError, "availability fallback is no longer supported"):
             LEDGER.append_event(self.ledger, {
-                **event, "fallback_reason": "gpt56-family-unavailable",
+                **event, "fallback_reason": "gpt6-and-gpt56-families-unavailable",
             })
-        self.assertTrue(LEDGER.append_event(self.ledger, {
-            **event, "fallback_reason": "gpt56-family-unavailable",
+        with self.assertRaisesRegex(ValueError, "availability fallback is no longer supported"):
+            LEDGER.append_event(self.ledger, {
+            **event, "fallback_reason": "gpt6-and-gpt56-families-unavailable",
             "capability_decision": decision,
-        }))
+            })
         legacy = self.root / "legacy.jsonl"
         legacy.write_text(json.dumps({
             **event, "route_id": "legacy", "segment_id": "old",
@@ -836,6 +837,14 @@ class LedgerTests(unittest.TestCase):
         events, warnings = LEDGER.read_events(legacy)
         self.assertEqual(len(events), 1)
         self.assertEqual(warnings, [])
+
+    def test_gpt55_capability_decision_rejects_available_gpt6_model(self):
+        decision = {
+            **self.capability_decision(),
+            "available_models": ["gpt-5.5", "gpt-6-sol"],
+        }
+        with self.assertRaisesRegex(ValueError, "availability fallback is no longer supported"):
+            LEDGER.validate_capability_decision(decision)
 
     def test_rejects_empty_segment_identifier(self):
         event = {

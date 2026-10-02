@@ -20,7 +20,7 @@ Resolve this path from the nearest Git root with `python3 scripts/model_usage_le
 - `routing_efficiency`: observed orchestration metrics from task metadata or user confirmation. Optional fields cover routing, queue wait, executor startup, model switch, Restore, useful execution, model/tool round trips, and state-gate stops. Never fill missing fields with estimates.
 - `allocation`: one recommended snapshot. Fields: `event_id`, `timestamp`, `basis`, and `allocation`, whose percentages total 100.
 
-Use `source=user-confirmed` when the user supplies actual usage and `source=task-metadata` only when Codex exposes reliable metadata. Never convert a recommendation into an `execution` event. Use exact model names when known; otherwise use `available-default (unverified)`. An unverified default never authorizes a GPT-5.5 fallback while any GPT-5.6 route is selectable.
+Use `source=user-confirmed` when the user supplies actual usage and `source=task-metadata` only when Codex exposes reliable metadata. Never convert a recommendation into an `execution` event. Use exact model names when known; otherwise use `available-default (unverified)`. New routing is limited to GPT-6.1 Sol and GPT-6 Luna; preserve retired model names when reading historical executions and current-coordinator metadata. GPT-5.5 is never an availability fallback.
 
 For continued or delegated execution, atomically prepare a claim before project work, then bind every worker and result event to `route_id + plan_hash + segment_id + attempt_id`. A same-turn local matched `apply-fast-v1` Segment skips the claim because it cannot replay. The ledger derives stable event IDs and rejects repeated or conflicting identities. Legacy whole-task events remain readable but do not affect Segment proportions or retuning.
 
@@ -47,7 +47,7 @@ Derive task overlap from intersecting verified task intervals, and derive orches
 - Do not compare durations across substantially different task classes as if they were equivalent.
 - Preserve the old recommendation in history by appending a new allocation; never rewrite old JSONL events.
 - Record availability fallbacks so later queries can distinguish intentional routing from forced substitution.
-- For GPT-5.5, require `fallback_reason=gpt56-family-unavailable` plus a verified structured `capability_decision` bound to the complete attempt identity. It must show either a complete model surface with no GPT-5.6 route or pre-execution rejection of Sol, Terra, and Luna; free text alone is rejected.
+- Reject new GPT-5.5 availability-fallback executions. Continue reading historical GPT-5.5 records through legacy ledger handling so summaries remain available.
 
 The script validates enums and durations, assigns event IDs, deduplicates supplied event IDs, locks concurrent reads/writes, skips malformed lines with warnings, and never rewrites ledger history. Warnings from unrelated malformed historical lines do not block a complete current-route aggregate.
 

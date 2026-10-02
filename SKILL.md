@@ -1,6 +1,6 @@
 ---
 name: codex-auto-model-router
-description: Recommend and execute an efficient GPT-5.6 Sol, Terra, or Luna route with low-through-max reasoning for Codex project work. Prefer bounded direct tool concurrency, but automatically create or reuse a model-specific leaf agent when route-fit benefit clearly exceeds startup and aggregation overhead; no extra user permission is required. Use for code changes, tests, reviews, routed implementation, model recommendations, usage queries, retuning, and requests to disable, exit, restore, or check this Skill for the current project. Use the legacy strict state machine only when the user explicitly requests strict ledger auditing. Never auto-select Ultra or create a new top-level Codex task.
+description: Recommend and execute efficient GPT-6.1 Sol or GPT-6 Luna routes for Codex project work. Retired model IDs are rejected for routing and remain readable only as historical execution metadata. Prefer bounded direct tool concurrency, but automatically create or reuse a model-specific leaf agent when route-fit benefit clearly exceeds startup and aggregation overhead; no extra user permission is required. Use for code changes, tests, reviews, routed implementation, model recommendations, usage queries, retuning, and requests to disable, exit, restore, or check this Skill for the current project. Use the legacy strict state machine only when the user explicitly requests strict ledger auditing. Never auto-select Ultra or create a new top-level Codex task.
 ---
 
 # Codex Auto Model Router
@@ -39,23 +39,25 @@ After a successful exit, stop all Router classification, notices, delegation, re
 
 The coordinator never changes its own model. A leaf executor is a separate reasoning stream, not a model switch inside the current conversation, so there is no Restore step.
 
-The Router still evaluates every applicable request. It may report `tiny-local-fast-path`, `tool-bound-local-fast-path`, `startup-aware-local-fast-path`, `route-benefit-not-proven`, or `subagents-disabled-by-user`. A recommendation never proves actual model use, and a user model override remains the preferred recommendation.
+The Router still evaluates every applicable request. It may report `tiny-local-fast-path`, `tool-bound-local-fast-path`, `startup-aware-local-fast-path`, `route-benefit-not-proven`, or `subagents-disabled-by-user`. A recommendation never proves actual model use, and a supported GPT-6 model override remains the preferred recommendation.
 
 ## Model gradient
 
-Use the offline policy in `route_policy.py`; task evidence and explicit user overrides win.
+Use the offline policy in `route_policy.py`; task evidence and supported GPT-6 overrides win.
 
-- Luna/medium: deterministic mechanical work.
-- Luna/high: ordinary bounded implementation and normal research.
-- Luna/xhigh: large bounded scans or reviews with low-to-normal consequence.
-- Luna/max: large deterministic deep work with low-to-normal consequence.
-- Terra/high: explicit latency priority.
-- Sol/low: explicit user override or compatibility testing only; never automatic.
-- Sol/medium: bounded complex work.
-- Sol/high: high ambiguity, coupling, or consequence.
-- Sol/xhigh: classified reasoning/verification failure on complex work or explicit choice.
+- GPT-6 Luna/medium: deterministic mechanical work.
+- GPT-6 Luna/high: ordinary bounded implementation and normal research.
+- GPT-6 Luna/xhigh: large bounded scans or reviews with low-to-normal consequence.
+- GPT-6 Luna/max: large deterministic deep work with low-to-normal consequence and the `latency_priority` compatibility lane. This is a cost/value choice, not a fastest-route claim.
+- GPT-6.1 Sol/low: bounded complex work.
+- GPT-6.1 Sol/medium: high ambiguity or coupling.
+- GPT-6.1 Sol/high: high-consequence work.
+- GPT-6.1 Sol/xhigh: a classified reasoning or verification failure on complex work.
+- All listed efforts are available through explicit override; automatic use follows the lanes above. Sol/max is explicit-only.
 
-Never select Ultra automatically. Keep fallback inside GPT-5.6 whenever any GPT-5.6 executor is available. GPT-5.5 is allowed only after the complete GPT-5.6 family is proven unavailable, and that fallback must be disclosed once.
+Never select Ultra automatically. Only Luna routes may fall back to GPT-6.1 Sol at the same effort. Sol routes never downgrade to Luna; if Sol is unavailable, keep the recommendation and follow the normal local fail-open behavior. Reject retired Astra, GPT-6 Sol, GPT-5.6, and GPT-5.5 route requests. Keep retired names readable for current-coordinator metadata and historical ledger entries. GPT-5.5 is never an availability fallback. Unknown availability keeps the preferred route advisory.
+
+The user-provided Artificial Analysis graph (recorded 2026-10-02) plots GPT-6 Luna from about index 21 at $0.005/task (low) to index 37 at $0.068 (max), and GPT-6.1 Sol from about index 42 at $0.131 (low) to index 52 at $0.724 (max). Values are estimates from the supplied chart coordinates. The graph supports a value tier for Luna and a higher-capability tier for Sol; it does not establish latency or Codex subscription cost. See [benchmark evidence](references/benchmark-evidence.md).
 
 ## Direct tool concurrency
 
@@ -112,7 +114,7 @@ Strict mode may use hashes, claims, tickets, finish, and Restore. Even there, le
 
 ## Assess, Query, Record, Retune
 
-- Assess and Retune use Sol/high unless the user overrides them. Save the full report to `docs/codex-model-routing-report.md`; keep chat output brief.
+- Assess and Retune use GPT-6.1 Sol/high unless the user selects another supported route. Save the full report to `docs/codex-model-routing-report.md`; keep chat output brief.
 - Query and Record use local scripts and never create agents.
 - Use [routing-criteria.md](references/routing-criteria.md) when changing model assignments and [benchmark-evidence.md](references/benchmark-evidence.md) when changing evidence-derived lanes.
 - Use [usage-ledger.md](references/usage-ledger.md) for historical summaries. Recommendations are not proof of actual model use.

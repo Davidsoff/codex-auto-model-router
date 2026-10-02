@@ -14,37 +14,62 @@ from datetime import date, timedelta
 from pathlib import Path
 
 
-MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
-GPT55_MODEL = "gpt-5.5"
-FAMILY_FALLBACK_ORDER = {
-    "gpt-5.6-sol": ("gpt-5.6-terra", "gpt-5.6-luna"),
-    "gpt-5.6-terra": ("gpt-5.6-sol", "gpt-5.6-luna"),
-    "gpt-5.6-luna": ("gpt-5.6-terra", "gpt-5.6-sol"),
-}
 RUNTIME_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 ROUTED_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+GPT55_MODEL = "gpt-5.5"
+GPT56_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+HISTORICAL_GPT6_MODELS = ("gpt-6-astra", "gpt-6-sol")
+MODEL_CATALOG = {
+    "gpt-6.1-sol": {
+        "role": "strong",
+        "routable_efforts": ROUTED_EFFORTS, "ultra_eligible": True,
+        "preset_stem": "codex_auto_model_executor_gpt61_sol",
+    },
+    "gpt-6-luna": {
+        "role": "efficient",
+        "routable_efforts": ROUTED_EFFORTS, "ultra_eligible": False,
+        "preset_stem": "codex_auto_model_executor_gpt6_luna",
+    },
+}
+MODELS = tuple(MODEL_CATALOG)
+GPT6_MODELS = MODELS
+
+# Task classification chooses a semantic lane. Model IDs are resolved separately.
+TASK_LANES = {
+    "mechanical_default": {"role": "efficient", "effort": "medium"},
+    "ordinary_default": {"role": "efficient", "effort": "high"},
+    "bounded_scan": {"role": "efficient", "effort": "xhigh"},
+    "bounded_deep_deterministic": {"role": "efficient", "effort": "max"},
+    "latency_priority": {"role": "efficient", "effort": "max"},
+    "complex_bounded": {"role": "strong", "effort": "low"},
+    "complex_uncertain": {"role": "strong", "effort": "medium"},
+    "high_consequence": {"role": "frontier", "effort": "high"},
+    "complex_failed_escalation": {"role": "strong", "effort": "xhigh"},
+}
+ROLE_PREFERRED_MODELS = {
+    "efficient": "gpt-6-luna",
+    "strong": "gpt-6.1-sol", "frontier": "gpt-6.1-sol",
+}
 CANONICAL_ROUTING_LANES = {
+    lane: {"model": ROLE_PREFERRED_MODELS[value["role"]], "effort": value["effort"]}
+    for lane, value in TASK_LANES.items()
+}
+
+# Immutable GPT-5.6-only benchmark contract. It supplies provenance for the
+# legacy family and is never treated as GPT-6 timing or quality evidence.
+LEGACY_GPT56_ROUTING_LANES = {
     "mechanical_default": {"model": "gpt-5.6-luna", "effort": "medium"},
     "ordinary_default": {"model": "gpt-5.6-luna", "effort": "high"},
     "bounded_scan": {"model": "gpt-5.6-luna", "effort": "xhigh"},
     "bounded_deep_deterministic": {"model": "gpt-5.6-luna", "effort": "max"},
     "latency_priority": {"model": "gpt-5.6-terra", "effort": "high"},
     "complex_bounded": {"model": "gpt-5.6-sol", "effort": "medium"},
-    "complex_uncertain_or_high_consequence": {
-        "model": "gpt-5.6-sol", "effort": "high",
-    },
+    "complex_uncertain_or_high_consequence": {"model": "gpt-5.6-sol", "effort": "high"},
     "complex_failed_escalation": {"model": "gpt-5.6-sol", "effort": "xhigh"},
 }
-LANE_FALLBACK_ROUTES = {
-    "mechanical_default": (("gpt-5.6-terra", "medium"), ("gpt-5.6-sol", "medium")),
-    "ordinary_default": (("gpt-5.6-terra", "high"), ("gpt-5.6-sol", "medium")),
-    "bounded_scan": (("gpt-5.6-terra", "high"), ("gpt-5.6-sol", "medium")),
-    "bounded_deep_deterministic": (("gpt-5.6-sol", "medium"), ("gpt-5.6-terra", "xhigh")),
-    "latency_priority": (("gpt-5.6-luna", "high"), ("gpt-5.6-sol", "medium")),
-    "complex_bounded": (("gpt-5.6-terra", "xhigh"), ("gpt-5.6-luna", "max")),
-    "complex_uncertain_or_high_consequence": (("gpt-5.6-terra", "max"), ("gpt-5.6-luna", "max")),
-    "complex_failed_escalation": (("gpt-5.6-terra", "max"), ("gpt-5.6-luna", "max")),
-}
+
+# Only Luna and GPT-6.1 Sol are routable. Historical model identifiers remain
+# recognizable in coordinator metadata and ledger records, never as fallbacks.
 THREAD_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 SEGMENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 AGENT_TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,47}$")
@@ -92,16 +117,40 @@ MODEL_ALIASES = {
     "gpt-5.6 sol": "gpt-5.6-sol",
     "gpt5.6": "gpt-5.6-sol",
     "gpt5.6 sol": "gpt-5.6-sol",
-    "sol": "gpt-5.6-sol",
+    "sol": "gpt-6.1-sol",
+    "gpt-6.1 sol": "gpt-6.1-sol",
+    "gpt-6.1-sol": "gpt-6.1-sol",
+    "gpt6.1-sol": "gpt-6.1-sol",
+    "gpt6.1 sol": "gpt-6.1-sol",
+    "gpt61 sol": "gpt-6.1-sol",
     "gpt-5.6-sol": "gpt-5.6-sol",
     "terra": "gpt-5.6-terra",
     "gpt-5.6 terra": "gpt-5.6-terra",
     "gpt5.6 terra": "gpt-5.6-terra",
     "gpt-5.6-terra": "gpt-5.6-terra",
-    "luna": "gpt-5.6-luna",
+    "luna": "gpt-6-luna",
+    "gpt-6-sol": "gpt-6-sol",
+    "gpt-6 sol": "gpt-6-sol",
+    "gpt-6 astra": "gpt-6-astra",
     "gpt-5.6 luna": "gpt-5.6-luna",
     "gpt5.6 luna": "gpt-5.6-luna",
     "gpt-5.6-luna": "gpt-5.6-luna",
+    "gpt-6-luna": "gpt-6-luna",
+    "gpt-6 luna": "gpt-6-luna",
+    "gpt6 luna": "gpt-6-luna",
+    "gpt6-luna": "gpt-6-luna",
+    "gpt 6 luna": "gpt-6-luna",
+}
+HISTORICAL_AVAILABLE_MODEL_ALIASES = {
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt-6 astra": "gpt-6-astra",
+    "gpt6 astra": "gpt-6-astra",
+    "gpt6-astra": "gpt-6-astra",
+    "gpt 6 astra": "gpt-6-astra",
+    "gpt-6 sol": "gpt-6-sol",
+    "gpt6 sol": "gpt-6-sol",
+    "gpt6-sol": "gpt-6-sol",
+    "gpt 6 sol": "gpt-6-sol",
 }
 EFFORT_ALIASES = {
     "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh",
@@ -190,18 +239,18 @@ def load_benchmark_evidence(path=None, today=None):
         gpt56_efforts = {
             (item.get("model"), item.get("effort"))
             for item in effort_metrics if isinstance(item, dict)
-            and item.get("model") in MODELS
+            and item.get("model") in GPT56_MODELS
         }
         expected_efforts = {
-            (model, effort) for model in MODELS
+            (model, effort) for model in GPT56_MODELS
             for effort in ROUTED_EFFORTS
         }
         if not expected_efforts.issubset(gpt56_efforts):
             raise ValueError("gpt56-effort-matrix-incomplete")
-        required_lanes = set(CANONICAL_ROUTING_LANES)
+        required_lanes = set(LEGACY_GPT56_ROUTING_LANES)
         if not isinstance(lanes, dict) or set(lanes) != required_lanes:
             raise ValueError("missing-routing-lanes")
-        if lanes != CANONICAL_ROUTING_LANES:
+        if lanes != LEGACY_GPT56_ROUTING_LANES:
             raise ValueError("routing-lane-mapping-mismatch")
         for lane in required_lanes:
             normalize_model(lanes[lane].get("model"))
@@ -274,7 +323,19 @@ def normalize_model(value):
     normalized = MODEL_ALIASES.get(value.strip().lower())
     if normalized is None:
         raise ValueError(f"unsupported model: {value}")
+    if normalized in GPT56_MODELS:
+        return normalized
+    if normalized not in MODELS:
+        raise ValueError(f"obsolete model is not routable: {value}")
     return normalized
+
+
+def require_routable_model(model):
+    if model in GPT56_MODELS:
+        raise ValueError("GPT-5.6 models are not routable; choose a GPT-6 model")
+    if model not in MODELS:
+        raise ValueError(f"unsupported routable model: {model}")
+    return model
 
 
 def normalize_effort(value):
@@ -294,8 +355,8 @@ def _validate_ultra_route(model, effort, *, explicit, mode):
         raise ValueError("ultra requires an explicit user effort override")
     if mode != "apply":
         raise ValueError("ultra is supported only for an explicit Apply request")
-    if model == "gpt-5.6-luna":
-        raise ValueError("GPT-5.6 Luna does not support ultra")
+    if not MODEL_CATALOG.get(model, {}).get("ultra_eligible", False):
+        raise ValueError(f"{model} does not support ultra")
 
 
 def normalize_available_model(value):
@@ -304,28 +365,60 @@ def normalize_available_model(value):
     key = value.strip().lower()
     if key in ("gpt-5.5", "gpt5.5"):
         return GPT55_MODEL
-    return MODEL_ALIASES.get(key)
+    return MODEL_ALIASES.get(key) or HISTORICAL_AVAILABLE_MODEL_ALIASES.get(key)
 
 
 def is_gpt56_model(value):
+    return value in GPT56_MODELS
+
+
+def is_supported_model(value):
     return value in MODELS
 
 
+def _target_lane(model, effort):
+    for lane, route in CANONICAL_ROUTING_LANES.items():
+        if (route["model"], route["effort"]) == (model, effort):
+            return lane
+    return None
+
+
+def _generic_fallback_chain(target_model, target_effort):
+    role = MODEL_CATALOG[target_model]["role"]
+    role_order = {
+        "efficient": ("gpt-6-luna", "gpt-6.1-sol"),
+        "strong": ("gpt-6.1-sol",),
+        "frontier": ("gpt-6.1-sol",),
+    }[role]
+    return tuple((model, target_effort) for model in role_order)
+
+
 def resolve_family_fallback(target_model, target_effort, available_models=None):
-    """Resolve pre-execution availability without leaving GPT-5.6 prematurely."""
-    target_model = normalize_model(target_model)
+    """Resolve a complete availability surface through lane-specific candidates."""
+    target_model = require_routable_model(normalize_model(target_model))
     target_effort = normalize_effort(target_effort)
     _validate_ultra_route(
         target_model, target_effort, explicit=target_effort == "ultra", mode="apply"
     )
-    target_lane = next((
-        lane for lane, route in CANONICAL_ROUTING_LANES.items()
-        if (route["model"], route["effort"]) == (target_model, target_effort)
-    ), None)
+    target_lane = _target_lane(target_model, target_effort)
+    candidates = _generic_fallback_chain(target_model, target_effort)
+    candidates = ((target_model, target_effort),) + tuple(
+        candidate for candidate in candidates
+        if candidate != (target_model, target_effort)
+    )
+    candidates = tuple(
+        (model, effort) for model, effort in candidates
+        if effort != "ultra" or MODEL_CATALOG[model]["ultra_eligible"]
+    )
     metadata = {
-        "fallback_policy_version": 2,
+        "fallback_policy_version": 3,
         "target_lane": target_lane,
         "quality_degraded": False,
+        "preferred_route": {"model": target_model, "effort": target_effort},
+        "fallback_chain": [
+            {"model": model, "effort": effort} for model, effort in candidates
+        ],
+        "availability_complete": available_models is not None,
     }
     if available_models is None:
         return {
@@ -333,7 +426,8 @@ def resolve_family_fallback(target_model, target_effort, available_models=None):
             "execution": {"model": target_model, "effort": target_effort},
             "fallback": False,
             "gpt56_family_available": None,
-            "reason": "availability-unknown-try-gpt56-target-first",
+            "gpt6_family_available": None,
+            "reason": "availability-unknown-try-preferred-first",
             **metadata,
         }
 
@@ -341,47 +435,28 @@ def resolve_family_fallback(target_model, target_effort, available_models=None):
         normalized for model in available_models
         if (normalized := normalize_available_model(model)) is not None
     }
-    if target_model in available:
-        execution_model = target_model
-        execution_effort = target_effort
+    execution_model, execution_effort = next(
+        ((model, effort) for model, effort in candidates if model in available),
+        (None, None),
+    )
+    if (execution_model, execution_effort) == (target_model, target_effort):
         reason = "target-available"
+    elif execution_model is not None:
+        reason = "lane-preserving-fallback"
     else:
-        lane_candidates = LANE_FALLBACK_ROUTES.get(target_lane, ())
-        execution_model, execution_effort = next(
-            (
-                (model, effort) for model, effort in lane_candidates
-                if model in available
-            ),
-            (None, None),
-        )
-        if execution_model is None:
-            execution_model = next(
-                (
-                    model for model in FAMILY_FALLBACK_ORDER[target_model]
-                    if model in available
-                    and not (target_effort == "ultra" and model == "gpt-5.6-luna")
-                ),
-                None,
-            )
-            execution_effort = target_effort if execution_model else None
-        reason = "gpt56-family-fallback" if execution_model else None
+        reason = None
 
-    family_available = any(model in available for model in MODELS)
-    if (
-        execution_model is None and target_effort != "ultra"
-        and not family_available and GPT55_MODEL in available
-    ):
-        execution_model = GPT55_MODEL
-        execution_effort = target_effort
-        reason = "gpt56-family-unavailable"
-    elif execution_model is None:
+    gpt6_available = any(model in available for model in GPT6_MODELS)
+    gpt56_available = any(model in available for model in GPT56_MODELS)
+    if execution_model is None:
         reason = "no-supported-model-available"
 
     return {
         "target": {"model": target_model, "effort": target_effort},
         "execution": {"model": execution_model, "effort": execution_effort},
         "fallback": (execution_model, execution_effort) != (target_model, target_effort),
-        "gpt56_family_available": family_available,
+        "gpt56_family_available": gpt56_available,
+        "gpt6_family_available": gpt6_available,
         "reason": reason,
         **dict(metadata, quality_degraded=execution_model != target_model),
     }
@@ -508,7 +583,7 @@ def recommended_route(
     if mode in ("assess", "retune"):
         # Router analysis is intentionally fixed at the user-approved route.
         # select_route still applies an explicit user override afterwards.
-        return "gpt-5.6-sol", "high", "fixed-analysis-default"
+        return "gpt-6.1-sol", "high", "fixed-analysis-default"
 
     lanes = CANONICAL_ROUTING_LANES
     if (
@@ -516,17 +591,10 @@ def recommended_route(
         and failure_kind in ("reasoning", "verification")
     ):
         lane = "complex_failed_escalation"
-    elif (
-        signals["consequence"] == "high" or signals["ambiguity"] == "high"
-        or (
-            signals["coupling"] == "high"
-            and (
-                task_kind == "complex"
-                or signals["verification"] == "judgment"
-            )
-        )
-    ):
-        lane = "complex_uncertain_or_high_consequence"
+    elif signals["consequence"] == "high":
+        lane = "high_consequence"
+    elif signals["ambiguity"] == "high" or signals["coupling"] == "high":
+        lane = "complex_uncertain"
     elif (
         task_kind in ("ordinary", "complex")
         and size == "large"
@@ -576,27 +644,11 @@ def recommended_route(
     else:
         lane = "ordinary_default"
     selected = lanes[lane]
-    source = (
-        "benchmark-prior" if evidence.get("status") == "active"
-        else "deterministic-policy"
-    )
+    source = "deterministic-policy"
     return (
         normalize_model(selected["model"]), normalize_effort(selected["effort"]),
         f"{source}:{lane}",
     )
-
-
-def _legacy_recommended_route(
-    mode, task_kind, risk, size, latency_priority="normal"
-):
-    """Retained as an explicit reference for stale/invalid snapshot tests."""
-    if risk == "high" or task_kind == "complex":
-        return "gpt-5.6-sol", "high", "deterministic-fallback"
-    if task_kind == "mechanical":
-        return "gpt-5.6-luna", "medium", "deterministic-fallback"
-    if latency_priority == "high":
-        return "gpt-5.6-terra", "high", "deterministic-fallback"
-    return "gpt-5.6-luna", "high", "deterministic-fallback"
 
 
 def select_route(
@@ -617,8 +669,11 @@ def select_route(
     evidence_path=None,
     latency_priority=None,
     prior_failure_kind=None,
+    available_models=None,
 ):
     report_model = normalize_model(report_model)
+    if report_model is not None:
+        require_routable_model(report_model)
     report_effort = normalize_effort(report_effort)
     evidence = load_benchmark_evidence(evidence_path)
     target_model, target_effort, source = recommended_route(
@@ -629,11 +684,11 @@ def select_route(
 
     explicit_override = model_override is not None or effort_override is not None
     if model_override is not None:
-        target_model = normalize_model(model_override)
+        target_model = require_routable_model(normalize_model(model_override))
     if effort_override is not None:
         target_effort = normalize_effort(effort_override)
         if target_effort == "ultra" and model_override is None:
-            target_model = "gpt-5.6-sol"
+            target_model = "gpt-6.1-sol"
     if explicit_override:
         source = "user-override"
     _validate_ultra_route(
@@ -641,12 +696,19 @@ def select_route(
     )
 
     current = current or unavailable_current()
-    execution_model, execution_effort = target_model, target_effort
+    fallback = resolve_family_fallback(
+        target_model, target_effort, available_models
+    )
+    execution_model = fallback["execution"]["model"]
+    execution_effort = fallback["execution"]["effort"]
     if current.get("status") in ("verified", "synthetic") and (
         current.get("model"), current.get("effort")
-    ) == (target_model, target_effort):
+    ) == (execution_model, execution_effort):
         dispatch = "local"
-        reason = "route-already-matched"
+        reason = (
+            "route-already-matched" if not fallback["fallback"]
+            else fallback["reason"]
+        )
     elif current.get("status") in ("verified", "synthetic") and current.get("thread_id"):
         dispatch = "same-task-switch"
         reason = source
@@ -654,19 +716,21 @@ def select_route(
         dispatch = "selectable-subagent-or-local"
         reason = "original-route-unavailable"
 
-    restore_required = dispatch == "same-task-switch" and is_gpt56_model(
-        current.get("model")
+    restore_required = dispatch == "same-task-switch" and current.get("model") in (
+        GPT6_MODELS + HISTORICAL_GPT6_MODELS
     )
     return {
         "route_id": str(uuid.uuid4()),
         "mode": mode,
         "recommended": {"model": target_model, "effort": target_effort, "source": source},
+        "preferred_route": {"model": target_model, "effort": target_effort},
         "execution": {
             "model": execution_model,
             "effort": execution_effort,
             "dispatch": dispatch,
             "reason": reason,
         },
+        "fallback": fallback,
         "current": current,
         "routing_evidence": evidence_audit(evidence),
         "restore_required": restore_required,
@@ -991,7 +1055,7 @@ def _validate_parallel_segment_schema(segments, require_semantic_id=False):
             _merge_group(segment.get("merge_group"), segment_id)
 
         if segment.get("model") not in MODELS:
-            raise ValueError(f"segment {segment_id} has invalid GPT-5.6 model")
+            raise ValueError(f"segment {segment_id} has invalid supported model")
         if segment.get("effort") not in ROUTED_EFFORTS:
             raise ValueError(f"segment {segment_id} has invalid reasoning effort")
         if segment.get("work_estimate") not in ("short", "normal", "long"):
@@ -1913,8 +1977,8 @@ def validate_segment_cursor(
         original.get("model"), original.get("effort")
     ) != (original_model, original_effort):
         raise ValueError("envelope original route mismatch")
-    if plan.get("restore_required") and not is_gpt56_model(original.get("model")):
-        raise ValueError("Restore to a non-GPT-5.6 original is forbidden")
+    if plan.get("restore_required") and not is_supported_model(original.get("model")):
+        raise ValueError("Restore to an unsupported original is forbidden")
     if plan.get("plan_hash") != plan_hash(
         segments, plan.get("route_id"), original, plan.get("restore_required"),
         segment_budget, switch_budget, budget_source, plan.get("routing_evidence"),
@@ -1947,10 +2011,10 @@ def validate_fast_envelope(plan, route_id, segment_id, attempt_id):
         raise ValueError("fast plan requires exactly one segment")
     if route_id != plan.get("route_id"):
         raise ValueError("fast envelope route_id mismatch")
-    if plan.get("restore_required") and not is_gpt56_model(
+    if plan.get("restore_required") and not is_supported_model(
         plan.get("original", {}).get("model")
     ):
-        raise ValueError("Restore to a non-GPT-5.6 original is forbidden")
+        raise ValueError("Restore to an unsupported original is forbidden")
     segment = segments[0]
     if segment_id != segment.get("segment_id"):
         raise ValueError("fast envelope segment_id mismatch")
@@ -2055,8 +2119,12 @@ def plan_apply_segments(
         raise ValueError(f"Apply plan exceeds {MAX_CANDIDATE_SEGMENTS} candidate segments")
 
     global_model = normalize_model(model_override)
+    if global_model is not None:
+        require_routable_model(global_model)
     global_effort = normalize_effort(effort_override)
     report_model = normalize_model(report_model)
+    if report_model is not None:
+        require_routable_model(report_model)
     report_effort = normalize_effort(report_effort)
     if (report_model is None) != (report_effort is None):
         raise ValueError("report route requires both model and effort")
@@ -2136,6 +2204,8 @@ def plan_apply_segments(
             prior_failure_kind=prior_failure_kind,
         )
         segment_model = normalize_model(raw.get("model"))
+        if segment_model is not None:
+            require_routable_model(segment_model)
         segment_effort = normalize_effort(raw.get("effort"))
         route_source = raw.get("route_source", "user-override" if segment_model or segment_effort else None)
         if route_source not in (None, "user-override", "report"):
@@ -2156,7 +2226,7 @@ def plan_apply_segments(
         target_model = global_model or segment_model or report_default_model or target_model
         target_effort = global_effort or segment_effort or report_default_effort or target_effort
         if target_effort == "ultra" and not (global_model or segment_model):
-            target_model = "gpt-5.6-sol"
+            target_model = "gpt-6.1-sol"
         if explicit:
             source = "user-override"
         elif route_source == "report" or report_default_model:
@@ -2225,7 +2295,7 @@ def plan_apply_segments(
 
     restore_required = bool(
         current_route and previous_route and previous_route != current_route
-        and is_gpt56_model(current_route[0])
+        and current_route[0] in GPT6_MODELS
     )
     if restore_required:
         switches += 1
@@ -2506,6 +2576,7 @@ def main():
             args.evidence_path,
             args.latency_priority,
             args.prior_failure_kind,
+            args.available_model,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

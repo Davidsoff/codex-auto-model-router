@@ -208,14 +208,14 @@ class RouterRuntimeTests(unittest.TestCase):
             item for item in plan["segments"] if item["segment_id"] == identifier
         )
         return {
-            "schema_version": 1, "verified": True,
+            "schema_version": 2, "verified": True,
             "source": RUNTIME.ledger.CAPABILITY_DECISION_SOURCE,
             "route_id": plan["route_id"], "plan_hash": plan["plan_hash"],
             "segment_id": identifier, "attempt_id": selected["attempt_id"],
             "target_model": selected["model"], "target_effort": selected["effort"],
             "execution_model": execution_model,
             "execution_effort": selected["effort"],
-            "reason": "gpt56-family-unavailable",
+            "reason": "gpt6-and-gpt56-families-unavailable",
             "availability_complete": True, "available_models": ["gpt-5.5"],
         }
 
@@ -267,10 +267,10 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_fast_local_begin_skips_claim_and_returns_capsule(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-luna", "medium")
+            [segment()], current=current("gpt-6-luna", "medium")
         )
         result = self.begin_result(
-            self.envelope(plan), current("gpt-5.6-luna", "medium")
+            self.envelope(plan), current("gpt-6-luna", "medium")
         )
         self.assertFalse(result["claim_required"])
         self.assertIsNone(result["claimed"])
@@ -435,17 +435,17 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_fast_switch_claims_once_and_blocks_replay(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-sol", "high")
+            [segment()], current=current("gpt-6.1-sol", "high")
         )
         encoded = json.dumps(self.envelope(plan))
         with patch.object(
-            RUNTIME, "_current", return_value=current("gpt-5.6-luna", "medium")
+            RUNTIME, "_current", return_value=current("gpt-6-luna", "medium")
         ):
             with redirect_stdout(io.StringIO()):
                 RUNTIME.begin(self.args(envelope_json=encoded))
         with self.assertRaisesRegex(SystemExit, "already claimed"):
             with patch.object(
-                RUNTIME, "_current", return_value=current("gpt-5.6-luna", "medium")
+                RUNTIME, "_current", return_value=current("gpt-6-luna", "medium")
             ):
                 RUNTIME.begin(self.args(envelope_json=encoded))
         events, warnings = RUNTIME.ledger.read_events(self.ledger)
@@ -457,7 +457,7 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_begin_finish_restore_persists_canonical_state(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-sol", "medium")
+            [segment()], current=current("gpt-6.1-sol", "medium")
         )
         selected = plan["segments"][0]
         started = self.begin_result(
@@ -487,7 +487,7 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_compacted_finish_requires_only_persisted_identity(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-sol", "medium")
+            [segment()], current=current("gpt-6.1-sol", "medium")
         )
         selected = plan["segments"][0]
         self.begin_result(
@@ -682,7 +682,7 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_restore_warning_is_idempotent_and_never_retries(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-sol", "medium")
+            [segment()], current=current("gpt-6.1-sol", "medium")
         )
         selected = plan["segments"][0]
         self.begin_result(
@@ -696,12 +696,12 @@ class RouterRuntimeTests(unittest.TestCase):
             "actual_effort": selected["effort"],
         })
         failed = self.restore_result(
-            plan, runtime_current=current("gpt-5.6-luna", "low")
+            plan, runtime_current=current("gpt-6-luna", "low")
         )
         self.assertEqual(failed["state_gate"], "degraded")
         self.assertFalse(failed["restore_recovered"])
         repeated = self.restore_result(
-            plan, runtime_current=current("gpt-5.6-sol", "medium")
+            plan, runtime_current=current("gpt-6.1-sol", "medium")
         )
         self.assertEqual(repeated["state_gate"], "degraded")
         self.assertTrue(repeated["restore_recovered"])
@@ -727,20 +727,17 @@ class RouterRuntimeTests(unittest.TestCase):
             events, _ = RUNTIME.ledger.read_events(ledger_path)
             self.assertNotIn("segment_claim", [item["event"] for item in events])
 
-    def test_begin_binds_verified_gpt55_capability_fallback_to_claim(self):
+    def test_begin_rejects_gpt55_availability_fallback(self):
         plan = RUNTIME.policy.plan_apply_segments(
             [segment()], current=current("gpt-5.6-luna", "low")
         )
         decision = self.capability_decision(plan, "docs")
         envelope = {**self.envelope(plan), "capability_decision": decision}
-        started = self.begin_result(envelope, current("gpt-5.5", "medium"))
-        self.assertTrue(started["claim_required"])
-        self.assertEqual(started["claim_state"], "prepared")
-        events, warnings = RUNTIME.ledger.read_events(self.ledger)
-        self.assertEqual(warnings, [])
-        self.assertEqual(events[0]["capability_decision_hash"], (
-            RUNTIME.ledger.capability_decision_hash(decision)
-        ))
+        with self.assertRaisesRegex(SystemExit, "availability fallback is no longer supported"):
+            with patch.object(RUNTIME, "_current", return_value=current("gpt-5.5", "medium")):
+                RUNTIME.begin(self.args(envelope_json=json.dumps(envelope)))
+        events, _ = RUNTIME.ledger.read_events(self.ledger)
+        self.assertNotIn("segment_claim", [item["event"] for item in events])
 
     def test_parallel_prepared_claim_recovers_until_dispatch_confirmed(self):
         plan = self.parallel_plan()
@@ -760,13 +757,14 @@ class RouterRuntimeTests(unittest.TestCase):
 
     def test_finish_records_verified_result_metrics_and_restore(self):
         plan = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-sol", "medium")
+            [segment()], current=current("gpt-6.1-sol", "medium")
         )
+        selected = plan["segments"][0]
         result = {
             "plan": plan, "segment_id": "docs", "outcome": "completed",
             "task_class": "docs", "verification": "deterministic",
-            "source": "user-confirmed", "actual_model": "gpt-5.6-luna",
-            "actual_effort": "low",
+            "source": "user-confirmed", "actual_model": selected["model"],
+            "actual_effort": selected["effort"],
             "metrics": {
                 "source": "task-metadata", "routing_seconds": 0.5,
                 "tool_round_trips": 2, "state_gate": "passed",
@@ -806,10 +804,11 @@ class RouterRuntimeTests(unittest.TestCase):
         switched = RUNTIME.policy.plan_apply_segments(
             [segment()], current=current("gpt-5.6-sol", "medium")
         )
+        selected = switched["segments"][0]
         result = {
             "plan": switched, "segment_id": "docs", "outcome": "completed",
-            "source": "user-confirmed", "actual_model": "gpt-5.6-luna",
-            "actual_effort": "low",
+            "source": "user-confirmed", "actual_model": selected["model"],
+            "actual_effort": selected["effort"],
         }
         with self.assertRaisesRegex(SystemExit, "matching segment claim"):
             RUNTIME.finish(self.args(result_json=json.dumps(result)))
@@ -822,11 +821,11 @@ class RouterRuntimeTests(unittest.TestCase):
 
         local_ledger = Path(self.temp.name) / "local.jsonl"
         local = RUNTIME.policy.plan_apply_segments(
-            [segment()], current=current("gpt-5.6-luna", "medium")
+            [segment()], current=current("gpt-6-luna", "medium")
         )
         local_result = {
             "plan": local, "segment_id": "docs", "outcome": "completed",
-            "source": "user-confirmed", "actual_model": "gpt-5.6-luna",
+            "source": "user-confirmed", "actual_model": "gpt-6-luna",
             "actual_effort": "medium",
         }
         output = io.StringIO()
@@ -891,7 +890,7 @@ class RouterRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "route_id mismatch"):
             RUNTIME.finish(self.args(result_json=json.dumps(result)))
 
-    def test_finish_requires_gpt55_family_unavailable_reason_before_consuming_claim(self):
+    def test_finish_rejects_gpt55_availability_fallback_before_consuming_claim(self):
         plan = RUNTIME.policy.plan_apply_segments(
             [segment()], current=current("gpt-5.6-sol", "medium")
         )
@@ -908,16 +907,10 @@ class RouterRuntimeTests(unittest.TestCase):
             "source": "user-confirmed", "actual_model": "gpt-5.5",
             "actual_effort": selected["effort"],
         }
-        with self.assertRaisesRegex(SystemExit, "capability_decision"):
+        with self.assertRaisesRegex(SystemExit, "availability fallback is no longer supported"):
             RUNTIME.finish(self.args(result_json=json.dumps(result)))
         events, _ = RUNTIME.ledger.read_events(self.ledger)
         self.assertNotIn("segment_result", [item["event"] for item in events])
-        result["fallback_reason"] = "gpt56-family-unavailable"
-        with self.assertRaisesRegex(SystemExit, "capability_decision"):
-            RUNTIME.finish(self.args(result_json=json.dumps(result)))
-        result["capability_decision"] = decision
-        finished = self.finish_result(result)
-        self.assertTrue(finished["execution_recorded"])
 
     def test_parallel_execution_accepts_only_identity_bound_trusted_metadata(self):
         plan = self.parallel_plan()

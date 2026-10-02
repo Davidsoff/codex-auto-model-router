@@ -601,8 +601,8 @@ def _validated_capability_decision(decision, plan, segment, execution_route):
             decision, identity=identity, target=target, execution=execution_route,
         )
         return decision
-    if not isinstance(decision, dict) or decision.get("schema_version") != 1:
-        raise ValueError("model fallback requires capability_decision schema_version=1")
+    if not isinstance(decision, dict) or decision.get("schema_version") != 2:
+        raise ValueError("new model fallback requires capability_decision schema_version=2")
     if decision.get("verified") is not True or decision.get("source") != ledger.CAPABILITY_DECISION_SOURCE:
         raise ValueError("model fallback requires verified capability-interface evidence")
     if any(decision.get(field) != expected for field, expected in identity.items()):
@@ -616,7 +616,7 @@ def _validated_capability_decision(decision, plan, segment, execution_route):
         raise ValueError("capability_decision route mismatch")
     available = decision.get("available_models")
     if decision.get("availability_complete") is not True or not isinstance(available, list):
-        raise ValueError("GPT-5.6 fallback requires a complete capability model list")
+        raise ValueError("model fallback requires a complete capability model list")
     resolved = policy.resolve_family_fallback(target[0], target[1], available)
     if (
         resolved.get("execution", {}).get("model") != execution_route[0]

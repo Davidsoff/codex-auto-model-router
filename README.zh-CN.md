@@ -2,11 +2,11 @@
 
 [![Validate](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml/badge.svg)](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml)
 
-**面向 OpenAI Codex 的轻量 GPT-5.6 模型与推理强度路由器。** 推荐 Sol、Terra 或 Luna，以及 low 到 max 推理；优先通过直接工具并发降低开销，并在模型切换收益明确高于协调成本时自动使用对应模型的叶子智能体。
+**面向 OpenAI Codex 的轻量 GPT-6.1 Sol 和 GPT-6 Luna 推理路由器。** 将任务语义与具体模型标识分开，只选择这两个模型。旧模型标识不再用于路由，但仍可读取历史记录。
 
 [English](README.md) · [路由反馈](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=routing-feedback.yml) · [问题反馈](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=bug-report.yml)
 
-GPT-5.6 给 Codex 带来了很多有用的模型和推理组合，但每次都判断一遍，很快也成了一件麻烦事。我最初只是想让选择自动化，后来又发现：如果 Router 自己挡住了真正的工作，那还不如不用。
+GPT-5.6 为 Codex 带来了有用的模型和推理组合。GPT-6 加入后，直接把任务规则绑定到某一代模型会让后续扩展更困难，因此路由先判断任务通道，再由模型目录解析具体模型。
 
 所以 v2 默认采用 fail-open 收益门槛路径：快速给出建议，台账不进入关键路径，并在模型切换收益超过启动与汇总成本时自动创建有界子智能体。这也是我的第一个开源项目，欢迎把真实使用中的好坏都告诉我。
 
@@ -15,9 +15,12 @@ GPT-5.6 给 Codex 带来了很多有用的模型和推理组合，但每次都�
 ```text
 当前请求
 └─ 只根据这次任务重新评估
-   ├─ 机械、普通、扫描或确定性深度任务 → Luna
-   ├─ 明确追求低延迟 → Terra
-   └─ 复杂、高耦合、高歧义或高后果 → Sol
+   ├─ 机械、普通、扫描或确定性深度任务 → GPT-6 Luna
+   ├─ latency_priority 兼容通道 → GPT-6 Luna/max（成本与能力取舍）
+   ├─ 有界复杂任务 → GPT-6.1 Sol/low
+   ├─ 高歧义或高耦合 → GPT-6.1 Sol/medium
+   ├─ 高后果任务 → GPT-6.1 Sol/high
+   └─ 已分类的复杂推理失败 → GPT-6.1 Sol/xhigh
       ↓
    建议一致或切换不划算 → 主线程直接完成
    建议不同且路由收益超过开销 → 使用对应模型的叶子智能体
@@ -99,26 +102,31 @@ CLI 默认启用收益门槛委派；`--no-subagents` 是明确退出开关。�
 - 独立安全的工具和进程可以并发执行，不复制模型上下文，也不新增子智能体 UI 条目。
 - `--no-subagents` 可明确禁用委派、复用和代理并发；其他情况下无需额外询问许可。
 - 推荐路由与本轮实际使用的模型被明确分开，不再声称 Skill 已切换主对话模型。
-- Ultra 仍需用户显式开启；只要 Sol、Terra 或 Luna 任一可用，就不回退 GPT-5.5。
+- Ultra 仍需用户显式开启。路由只在 GPT-6.1 Sol 与 GPT-6 Luna 之间选择；GPT-5.6 不可选择，GPT-5.5 不再作为可用性回退。
 
 ## 模型梯度
 
 | 任务 | 默认路由 |
 |---|---|
-| 确定性机械任务 | Luna / medium |
-| 普通有界任务 | Luna / high |
-| 大型有界扫描或审查 | Luna / xhigh |
-| 大型确定性深度任务 | Luna / max |
-| 明确追求低延迟 | Terra / high |
-| 有界复杂任务 | Sol / medium |
-| 高歧义、高耦合或高后果 | Sol / high |
-| 复杂推理或验证已有失败 | Sol / xhigh |
+| 确定性机械任务 | GPT-6 Luna / medium |
+| 普通有界任务 | GPT-6 Luna / high |
+| 大型有界扫描或审查 | GPT-6 Luna / xhigh |
+| 大型确定性深度任务 | GPT-6 Luna / max |
+| `latency_priority` 兼容通道（成本与能力取舍） | GPT-6 Luna / max |
+| 有界复杂任务 | GPT-6.1 Sol / low |
+| 高歧义或高耦合 | GPT-6.1 Sol / medium |
+| 高后果任务 | GPT-6.1 Sol / high |
+| 复杂推理或验证已有失败 | GPT-6.1 Sol / xhigh |
 
-Ultra 永不自动启用。用户显式使用 Ultra 时，由其原生编排接管，并关闭 Router 并发。只有整个 GPT-5.6 家族都确认不可用时才回退 GPT-5.5。
+`latency_priority` 通道名为兼容而保留，其 Luna/max 路由体现成本与能力取舍，不代表最快路由。`sol` 表示 GPT-6.1 Sol；旧版 GPT-6 Sol 和 Astra 标识会被拒绝。GPT-5.6 和 GPT-5.5 也不可用于路由，但历史执行记录仍可读取。
+
+Ultra 永不自动启用。用户显式使用 Ultra 时，由其原生编排接管，并关闭 Router 并发。Luna 路由不可用时可按相同 effort 回退到 Sol；Sol 路由不会降级到 Luna。Sol 不可用时，保留首选路由建议并按常规本地 fail-open 路径处理。GPT-5.5 不再作为可用性回退。
 
 ## 测评与台账
 
-路由策略离线参考 OpenAI、Artificial Analysis、CursorBench、ChatBench、DeepSWE、SWE-Bench Pro 与 Terminal-Bench 的公开编码测评。任务本身的证据和用户指定始终优先；API effort 数据只作为相对能力、延迟和输出量先验，不代表 Codex 订阅成本或真实耗时。
+用户提供的 Artificial Analysis 图表（记录日期 2026-10-02）估算 Luna 从 low 的指数约 21、每任务约 $0.005，到 max 的指数约 37、每任务约 $0.068；Sol 6.1 从 low 的指数约 42、每任务约 $0.131，到 max 的指数约 52、每任务约 $0.724。这些值来自图表坐标估读，支持 Luna 承担低成本有界任务、Sol 承担更高能力任务。图表没有延迟数据，也没有测量 Codex 订阅费用。
+
+effort 的完整估值和限制记录在[测评证据](references/benchmark-evidence.md)中。历史 GPT-5.6 测评快照独立保留，不用于校准这些模型路由。任务证据和受支持的模型覆盖始终优先。
 
 完整数据见[测评证据](references/benchmark-evidence.md)和[机器可读快照](references/benchmark-evidence.json)。快照缺失、损坏或过期时，Router 直接使用确定性规则，不阻塞任务。
 

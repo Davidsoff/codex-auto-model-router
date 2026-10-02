@@ -1,9 +1,36 @@
 # Benchmark evidence and routing implications
 
+## Supplied Artificial Analysis graph (recorded 2026-10-02)
+
+The user supplied the rendered chart markup. Its plotted points and labels support the following approximate values, read from SVG coordinates. Treat these as chart estimates rather than exact source data.
+
+| Model / effort | Intelligence Index (approx.) | Cost per task (approx.) |
+|---|---:|---:|
+| GPT-6 Luna / low | 21 | $0.005 |
+| GPT-6 Luna / medium | 29 | $0.018 |
+| GPT-6 Luna / high | 32 | $0.029 |
+| GPT-6 Luna / xhigh | 34 | $0.042 |
+| GPT-6 Luna / max | 37 | $0.068 |
+| GPT-6.1 Sol / low | 42 | $0.131 |
+| GPT-6.1 Sol / medium | 48 | $0.214 |
+| GPT-6.1 Sol / high | 50 | $0.319 |
+| GPT-6.1 Sol / xhigh | 51 | $0.393 |
+| GPT-6.1 Sol / max | 52 | $0.724 |
+
+The graph supports Luna as the lower-cost choice for clear, bounded work and Sol 6.1 when more capability is useful. It provides no latency measurement, Codex end-to-end timing, or Codex subscription price. Do not infer speed or subscription savings from these values. The router uses task boundaries to select effort; the graph is supporting cost/capability context, not a per-lane quality guarantee.
+
+## Historical GPT-5.6 snapshot (unchanged)
+
+The snapshot and historical policy discussion below are retained for provenance.
+Their model choices and efficiency hypotheses do not define current automatic routing.
+
 Snapshot: `gpt56-routing-evidence-2026-07-31-r5`. The machine-readable source is
 [`benchmark-evidence.json`](benchmark-evidence.json). It expires after 90 days; a stale,
 missing, or invalid snapshot disables evidence-derived lanes and falls back to the
 deterministic task policy. Apply never fetches the network.
+
+This is a historical GPT-5.6 snapshot. Its measurements and eight-lane policy do not
+calibrate the current GPT-6 routes; GPT-6 currently uses deterministic capability policy.
 
 ## What counts as evidence
 

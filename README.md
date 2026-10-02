@@ -2,11 +2,11 @@
 
 [![Validate](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml/badge.svg)](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml)
 
-**A lightweight GPT-5.6 model and reasoning router for OpenAI Codex.** It recommends Sol, Terra, or Luna and low through max reasoning, prefers low-overhead direct tool concurrency, and automatically uses a model-specific leaf when the route benefit is clearly larger than its overhead.
+**A lightweight GPT-6.1 Sol and GPT-6 Luna reasoning router for OpenAI Codex.** It separates task lanes from model identities and selects only those two models. Retired model IDs are rejected for routing and remain readable in historical records.
 
 [简体中文](README.zh-CN.md) · [Routing feedback](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=routing-feedback.yml) · [Bug report](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=bug-report.yml)
 
-GPT-5.6 gives Codex many useful model and reasoning combinations. Choosing one for every task quickly became its own chore. I built this Skill to make that choice automatic—and then learned that a router which blocks the real work is worse than no router at all.
+GPT-5.6 gave Codex many useful model and reasoning combinations. With GPT-6, routing directly to versioned model names would make the next generation harder to add, so task lanes now describe the work and a model catalog resolves those lanes.
 
 Version 2 therefore uses a fail-open, benefit-gated default: choose quickly, keep bookkeeping out of the critical path, and create a bounded subagent automatically when model-switch benefit outweighs startup and aggregation cost. This is my first open-source project; practical feedback is genuinely welcome.
 
@@ -15,9 +15,12 @@ Version 2 therefore uses a fail-open, benefit-gated default: choose quickly, kee
 ```text
 Request
 └─ Re-evaluate the task itself
-   ├─ Mechanical, ordinary, scan, or deterministic deep work → Luna
-   ├─ Explicit latency priority → Terra
-   └─ Complex, coupled, ambiguous, or consequential → Sol
+   ├─ Mechanical, ordinary, scan, or deterministic deep work → GPT-6 Luna
+   ├─ latency_priority compatibility lane → GPT-6 Luna/max (cost/value choice)
+   ├─ Bounded complex work → GPT-6.1 Sol/low
+   ├─ High ambiguity or coupling → GPT-6.1 Sol/medium
+   ├─ High consequence → GPT-6.1 Sol/high
+   └─ Classified complex reasoning failure → GPT-6.1 Sol/xhigh
       ↓
    Recommendation matches or switching does not pay → run locally
    Recommendation differs and route benefit clears overhead → use that model's leaf agent
@@ -99,26 +102,31 @@ The CLI enables benefit-gated subagents by default. `--no-subagents` is the expl
 - Independent safe tools and processes may run concurrently without extra model contexts or child-agent UI entries.
 - `--no-subagents` explicitly disables delegate, reuse, and agent-parallel plans; no permission prompt is otherwise required.
 - Recommendations are clearly separated from the current task's observed model.
-- Ultra remains opt-in, and fallback stays inside GPT-5.6 while any Sol, Terra, or Luna route is available.
+- Ultra remains opt-in. Luna may fall back to Sol at the same effort; Sol routes never downgrade to Luna. GPT-5.5 is not an availability fallback.
 
 ## Model gradient
 
 | Work | Default route |
 |---|---|
-| Deterministic mechanical work | Luna / medium |
-| Ordinary bounded work | Luna / high |
-| Large bounded scans or reviews | Luna / xhigh |
-| Large deterministic deep work | Luna / max |
-| Explicit latency priority | Terra / high |
-| Bounded complex work | Sol / medium |
-| High ambiguity, coupling, or consequence | Sol / high |
-| Failed complex reasoning or verification | Sol / xhigh |
+| Deterministic mechanical work | GPT-6 Luna / medium |
+| Ordinary bounded work | GPT-6 Luna / high |
+| Large bounded scans or reviews | GPT-6 Luna / xhigh |
+| Large deterministic deep work | GPT-6 Luna / max |
+| `latency_priority` compatibility lane (cost/value choice) | GPT-6 Luna / max |
+| Bounded complex work | GPT-6.1 Sol / low |
+| High ambiguity or coupling | GPT-6.1 Sol / medium |
+| High-consequence work | GPT-6.1 Sol / high |
+| Failed complex reasoning or verification | GPT-6.1 Sol / xhigh |
 
-Ultra is never automatic. Explicit Ultra uses its native orchestration and disables Router-managed parallelism. GPT-5.5 is used only after the complete GPT-5.6 family is proven unavailable.
+The `latency_priority` lane name is retained for compatibility; its Luna/max route is a cost/value choice, not a fastest-route claim. `sol` selects GPT-6.1 Sol; retired GPT-6 Sol and Astra IDs are rejected for routing. GPT-5.6 and GPT-5.5 are also unavailable for routing, while historical execution records remain readable.
+
+Ultra is never automatic. Explicit Ultra uses its native orchestration and disables Router-managed parallelism. Unknown model availability keeps the preferred route advisory. If Sol is unavailable, the router retains its recommendation and follows the local fail-open path.
 
 ## Evidence and history
 
-Routing is calibrated with offline public coding-agent evidence from OpenAI, Artificial Analysis, CursorBench, ChatBench, DeepSWE, SWE-Bench Pro, and Terminal-Bench. Task evidence and user overrides remain primary. API effort data is only a relative prior, not measured Codex subscription cost or wall-clock time.
+The user-provided Artificial Analysis graph recorded 2026-10-02 estimates Luna from index 21 / $0.005 per task at low to index 37 / $0.068 at max, and Sol 6.1 from index 42 / $0.131 at low to index 52 / $0.724 at max. These are estimates read from chart coordinates; they support Luna for lower-cost bounded work and Sol for higher-capability work. The graph provides no latency data and does not measure Codex subscription costs.
+
+The graph's full effort estimates and limitations are recorded in [benchmark evidence](references/benchmark-evidence.md). Historical GPT-5.6 benchmark snapshots remain separate and do not calibrate these model routes. Task evidence and supported model overrides remain primary.
 
 See [benchmark evidence](references/benchmark-evidence.md) and the [machine-readable snapshot](references/benchmark-evidence.json). The snapshot is optional at runtime; missing, invalid, or stale evidence falls back to deterministic rules without blocking work.
 

@@ -40,7 +40,8 @@ EFFICIENCY_DURATIONS = (
 EFFICIENCY_COUNTS = ("model_round_trips", "tool_round_trips")
 USAGE_START = "<!-- MODEL_USAGE_START -->"
 USAGE_END = "<!-- MODEL_USAGE_END -->"
-GPT56_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+# Retain this identifier only so the strict runtime can reject its legacy
+# availability-fallback protocol explicitly.
 GPT55_MODEL = "gpt-5.5"
 CAPABILITY_DECISION_SOURCE = "capability-interface"
 
@@ -225,50 +226,8 @@ def capability_decision_hash(decision):
 
 
 def validate_capability_decision(decision, identity=None, target=None, execution=None):
-    """Validate identity-bound, pre-execution model availability evidence."""
-    if not isinstance(decision, dict) or decision.get("schema_version") != 1:
-        raise ValueError("GPT-5.5 execution requires capability_decision schema_version=1")
-    if decision.get("verified") is not True or decision.get("source") != CAPABILITY_DECISION_SOURCE:
-        raise ValueError("GPT-5.5 capability_decision must be verified capability-interface evidence")
-    if identity is not None and any(
-        decision.get(field) != expected for field, expected in identity.items()
-    ):
-        raise ValueError("GPT-5.5 capability_decision identity mismatch")
-    if target is not None and (
-        decision.get("target_model") != target[0]
-        or decision.get("target_effort") != target[1]
-    ):
-        raise ValueError("GPT-5.5 capability_decision target mismatch")
-    if execution is not None and (
-        decision.get("execution_model") != execution[0]
-        or decision.get("execution_effort") != execution[1]
-    ):
-        raise ValueError("GPT-5.5 capability_decision execution mismatch")
-    if decision.get("reason") != "gpt56-family-unavailable":
-        raise ValueError("GPT-5.5 capability_decision requires gpt56-family-unavailable")
-
-    complete_surface = decision.get("availability_complete") is True
-    available = decision.get("available_models")
-    complete_surface = complete_surface and isinstance(available, list) and all(
-        isinstance(model, str) and model for model in available
-    )
-    if complete_surface:
-        normalized = {model.strip().lower().replace("_", "-") for model in available}
-        complete_surface = GPT55_MODEL in normalized and not any(
-            model in normalized for model in GPT56_MODELS
-        )
-
-    rejections = decision.get("gpt56_rejections")
-    complete_rejections = isinstance(rejections, dict) and set(rejections) == set(GPT56_MODELS)
-    if complete_rejections:
-        complete_rejections = all(
-            value == "unavailable" for value in rejections.values()
-        )
-    if not (complete_surface or complete_rejections):
-        raise ValueError(
-            "GPT-5.5 capability_decision requires a complete model list or all GPT-5.6 rejections"
-        )
-    return decision
+    """Reject the retired GPT-5.5 fallback protocol."""
+    raise ValueError("GPT-5.5 availability fallback is no longer supported")
 
 
 def validate_event(event, allow_legacy=False):
@@ -296,21 +255,7 @@ def validate_event(event, allow_legacy=False):
         if event.get("verification", "unknown") not in VERIFICATIONS:
             raise ValueError("invalid execution verification")
         if _is_gpt55_model(event.get("model")) and not allow_legacy:
-            if event.get("fallback_reason") != "gpt56-family-unavailable":
-                raise ValueError(
-                    "GPT-5.5 execution requires fallback_reason=gpt56-family-unavailable"
-                )
-            identity = {
-                field: event.get(field)
-                for field in ("route_id", "plan_hash", "segment_id", "attempt_id")
-            }
-            if any(not value for value in identity.values()):
-                raise ValueError("GPT-5.5 execution requires complete attempt identity")
-            validate_capability_decision(
-                event.get("capability_decision"), identity=identity,
-                target=(event.get("fallback_from"), event.get("effort")),
-                execution=(event.get("model"), event.get("effort")),
-            )
+            raise ValueError("new GPT-5.5 availability fallback is no longer supported")
     elif event_type == "allocation":
         if event.get("basis") not in ("heuristic", "observed", "mixed"):
             raise ValueError("invalid allocation basis")

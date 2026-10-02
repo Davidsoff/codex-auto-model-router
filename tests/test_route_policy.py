@@ -14,7 +14,7 @@ POLICY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(POLICY)
 
 
-def current(model="gpt-5.6-sol", effort="ultra"):
+def current(model="gpt-6.1-sol", effort="ultra"):
     return {
         "status": "verified",
         "thread_id": "019f6001-95ae-7411-a5ba-7895a1897e49",
@@ -137,21 +137,24 @@ class RoutePolicyTests(unittest.TestCase):
             for index in range(count)
         ]
 
-    def test_fallback_keeps_sol_target_inside_gpt56_family(self):
+    def test_automatic_route_never_falls_back_to_gpt56(self):
         result = POLICY.resolve_family_fallback(
-            "Sol", "high", ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]
+            "gpt-6.1-sol", "high",
+            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"],
         )
-        self.assertEqual(result["execution"]["model"], "gpt-5.6-terra")
-        self.assertEqual(result["execution"]["effort"], "max")
-        self.assertEqual(result["reason"], "gpt56-family-fallback")
+        self.assertIsNone(result["execution"]["model"])
+        self.assertEqual(result["reason"], "no-supported-model-available")
         self.assertTrue(result["gpt56_family_available"])
+        self.assertTrue(all(
+            route["model"] in POLICY.MODELS
+            for route in POLICY.CANONICAL_ROUTING_LANES.values()
+        ))
 
     def test_lane_fallback_preserves_intent_instead_of_effort_label(self):
         cases = (
-            ("Luna", "high", ["Terra", "Sol"], ("gpt-5.6-terra", "high")),
-            ("Luna", "max", ["Sol"], ("gpt-5.6-sol", "medium")),
-            ("Terra", "high", ["Luna", "Sol"], ("gpt-5.6-luna", "high")),
-            ("Sol", "medium", ["Terra", "Luna"], ("gpt-5.6-terra", "xhigh")),
+            ("Luna", "high", ["Sol"], ("gpt-6.1-sol", "high")),
+            ("Luna", "max", ["Sol"], ("gpt-6.1-sol", "max")),
+            ("Sol", "medium", ["Luna"], (None, None)),
         )
         for model, effort, available, expected in cases:
             with self.subTest(model=model, effort=effort):
@@ -160,38 +163,94 @@ class RoutePolicyTests(unittest.TestCase):
                     (result["execution"]["model"], result["execution"]["effort"]),
                     expected,
                 )
-                self.assertEqual(result["fallback_policy_version"], 2)
+                self.assertEqual(result["fallback_policy_version"], 3)
                 self.assertIsNotNone(result["target_lane"])
 
-    def test_fallback_keeps_terra_target_inside_gpt56_family(self):
-        result = POLICY.resolve_family_fallback(
-            "Terra", "medium", ["gpt-5.6-luna", "gpt-5.5"]
-        )
-        self.assertEqual(result["execution"]["model"], "gpt-5.6-luna")
-        self.assertNotEqual(result["execution"]["model"], "gpt-5.5")
+    def test_luna_falls_back_to_sol_at_the_same_effort_for_every_effort(self):
+        for effort in POLICY.ROUTED_EFFORTS:
+            with self.subTest(effort=effort):
+                result = POLICY.resolve_family_fallback("Luna", effort, ["Sol"])
+                self.assertEqual(
+                    (result["execution"]["model"], result["execution"]["effort"]),
+                    ("gpt-6.1-sol", effort),
+                )
 
-    def test_fallback_keeps_luna_target_inside_gpt56_family(self):
+    def test_sol_routes_never_fall_back_to_luna_or_retired_models(self):
+        for effort in POLICY.ROUTED_EFFORTS:
+            with self.subTest(effort=effort):
+                result = POLICY.resolve_family_fallback(
+                    "Sol", effort, ["Luna", "gpt-6-astra", "gpt-6-sol"]
+                )
+                self.assertIsNone(result["execution"]["model"])
+                self.assertEqual(result["reason"], "no-supported-model-available")
+
+    def test_retired_model_overrides_are_rejected(self):
+        for model in ("gpt-6-astra", "gpt-6-sol", "Astra"):
+            with self.subTest(model=model), self.assertRaises(ValueError):
+                POLICY.select_route("apply", model_override=model)
+
+    def test_sol_max_is_available_only_by_explicit_override(self):
+        automatic = POLICY.select_route("apply", task_kind="complex", current=current())
+        explicit = POLICY.select_route(
+            "apply", model_override="Sol", effort_override="max", current=current()
+        )
+        self.assertNotEqual(automatic["recommended"]["effort"], "max")
+        self.assertEqual(
+            (explicit["recommended"]["model"], explicit["recommended"]["effort"]),
+            ("gpt-6.1-sol", "max"),
+        )
+
+    def test_gpt56_route_targets_are_rejected(self):
+        for target in ("Terra", "gpt-5.6-terra", "GPT-5.6 Sol"):
+            with self.subTest(target=target), self.assertRaisesRegex(
+                ValueError, "GPT-5.6 models are not routable"
+            ):
+                POLICY.resolve_family_fallback(target, "medium")
+        for target in ("Terra", "gpt-5.6-sol"):
+            with self.subTest(select_route=target), self.assertRaisesRegex(
+                ValueError, "GPT-5.6 models are not routable"
+            ):
+                POLICY.select_route("apply", model_override=target)
+        with self.assertRaisesRegex(ValueError, "GPT-5.6 models are not routable"):
+            POLICY.plan_apply_segments(
+                [self.segment("legacy-route")], model_override="Terra"
+            )
+
+    def test_luna_fallback_ignores_available_gpt56_models(self):
         result = POLICY.resolve_family_fallback(
             "Luna", "low", ["gpt-5.6-terra", "gpt-5.5"]
         )
-        self.assertEqual(result["execution"]["model"], "gpt-5.6-terra")
+        self.assertIsNone(result["execution"]["model"])
+        self.assertEqual(result["reason"], "no-supported-model-available")
 
-    def test_gpt55_is_allowed_only_when_all_gpt56_models_are_unavailable(self):
+    def test_gpt55_availability_fallback_is_disabled(self):
         result = POLICY.resolve_family_fallback(
-            "Terra", "medium", ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
+            "Luna", "medium", ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
         )
-        self.assertEqual(result["execution"]["model"], "gpt-5.5")
+        self.assertIsNone(result["execution"]["model"])
         self.assertFalse(result["gpt56_family_available"])
-        self.assertEqual(result["reason"], "gpt56-family-unavailable")
+        self.assertFalse(result["gpt6_family_available"])
+        self.assertEqual(result["reason"], "no-supported-model-available")
 
-    def test_unknown_availability_retries_gpt56_target_instead_of_assuming_gpt55(self):
-        result = POLICY.resolve_family_fallback("Terra", "medium")
-        self.assertEqual(result["execution"]["model"], "gpt-5.6-terra")
-        self.assertIsNone(result["gpt56_family_available"])
-        self.assertEqual(result["reason"], "availability-unknown-try-gpt56-target-first")
+    def test_gpt55_is_blocked_when_either_guarded_family_is_available(self):
+        cases = (
+            (["gpt-6.1-sol", "gpt-5.5"], "gpt-6.1-sol"),
+            (["gpt-5.6-sol", "gpt-5.5"], None),
+        )
+        for available, expected_model in cases:
+            with self.subTest(available=available):
+                result = POLICY.resolve_family_fallback(
+                    "Luna", "medium", available
+                )
+                self.assertEqual(result["execution"]["model"], expected_model)
+                self.assertNotEqual(result["execution"]["model"], "gpt-5.5")
+
+    def test_unknown_availability_does_not_make_gpt56_routable(self):
+        with self.assertRaisesRegex(ValueError, "GPT-5.6 models are not routable"):
+            POLICY.resolve_family_fallback("Terra", "medium")
 
     def test_empty_availability_never_invents_gpt55(self):
-        result = POLICY.resolve_family_fallback("Luna", "low", [])
+        result = POLICY.resolve_family_fallback("GPT-6 Luna", "low", [])
         self.assertIsNone(result["execution"]["model"])
         self.assertEqual(result["reason"], "no-supported-model-available")
 
@@ -200,7 +259,7 @@ class RoutePolicyTests(unittest.TestCase):
             "apply", current=current("gpt-5.5", "medium")
         )
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
-        self.assertEqual(route["execution"]["model"], "gpt-5.6-luna")
+        self.assertEqual(route["execution"]["model"], "gpt-6-luna")
         self.assertEqual(route["execution"]["effort"], "high")
         self.assertFalse(route["restore_required"])
 
@@ -213,12 +272,12 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(plan["switch_count"], 1)
         self.assertEqual(plan["original"]["model"], "gpt-5.5")
 
-    def test_segment_plan_still_restores_original_gpt56(self):
+    def test_segment_plan_does_not_restore_original_gpt56(self):
         plan = POLICY.plan_apply_segments(
             [self.segment("implement")], current=current("gpt-5.6-sol", "medium")
         )
-        self.assertTrue(plan["restore_required"])
-        self.assertEqual(plan["switch_count"], 2)
+        self.assertFalse(plan["restore_required"])
+        self.assertEqual(plan["switch_count"], 1)
 
     def test_envelope_rejects_restore_to_original_gpt55(self):
         plan = self.linear_plan(current("gpt-5.5", "medium"))
@@ -233,7 +292,7 @@ class RoutePolicyTests(unittest.TestCase):
             segment["attempt_id"] = POLICY.hashlib.sha256(
                 f"{plan['route_id']}:{plan['plan_hash']}:{segment['segment_id']}".encode()
             ).hexdigest()
-        with self.assertRaisesRegex(ValueError, "non-GPT-5.6 original"):
+        with self.assertRaisesRegex(ValueError, "unsupported original"):
             self.validate_cursor(plan, 1, "implement", ["analyze"])
 
     def test_detects_latest_current_route_for_exact_thread(self):
@@ -285,7 +344,7 @@ class RoutePolicyTests(unittest.TestCase):
 
     def test_ordinary_apply_uses_luna_high_and_restores(self):
         route = POLICY.select_route("apply", current=current())
-        self.assertEqual(route["recommended"]["model"], "gpt-5.6-luna")
+        self.assertEqual(route["recommended"]["model"], "gpt-6-luna")
         self.assertEqual(route["recommended"]["effort"], "high")
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
         self.assertTrue(route["restore_required"])
@@ -295,12 +354,12 @@ class RoutePolicyTests(unittest.TestCase):
             "apply", task_kind="mechanical", risk="low", size="tiny",
             current=current("gpt-5.6-sol", "high"),
         )
-        self.assertEqual(route["recommended"]["model"], "gpt-5.6-luna")
+        self.assertEqual(route["recommended"]["model"], "gpt-6-luna")
         self.assertEqual(route["recommended"]["effort"], "medium")
-        self.assertEqual(route["execution"]["model"], "gpt-5.6-luna")
+        self.assertEqual(route["execution"]["model"], "gpt-6-luna")
         self.assertEqual(route["execution"]["effort"], "medium")
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
-        self.assertTrue(route["restore_required"])
+        self.assertFalse(route["restore_required"])
 
     def test_explicit_override_still_controls_tiny_task(self):
         route = POLICY.select_route(
@@ -317,11 +376,11 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-luna", "medium"),
+            ("gpt-6-luna", "medium"),
         )
         self.assertEqual(
             route["recommended"]["source"],
-            "benchmark-prior:mechanical_default",
+            "deterministic-policy:mechanical_default",
         )
 
     def test_bounded_moderate_deterministic_work_prefers_luna_high(self):
@@ -332,11 +391,11 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-luna", "high"),
+            ("gpt-6-luna", "high"),
         )
         self.assertEqual(
             route["recommended"]["source"],
-            "benchmark-prior:ordinary_default",
+            "deterministic-policy:ordinary_default",
         )
 
     def test_compact_cross_file_reasoning_uses_luna_high(self):
@@ -347,11 +406,11 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-luna", "high"),
+            ("gpt-6-luna", "high"),
         )
         self.assertEqual(
             route["recommended"]["source"],
-            "benchmark-prior:ordinary_default",
+            "deterministic-policy:ordinary_default",
         )
 
     def test_high_coupling_bounded_ordinary_work_uses_sol_medium(self):
@@ -362,7 +421,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "medium"),
+            ("gpt-6.1-sol", "medium"),
         )
 
     def test_unusually_deep_deterministic_work_prefers_luna_max(self):
@@ -379,11 +438,11 @@ class RoutePolicyTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     (route["recommended"]["model"], route["recommended"]["effort"]),
-                    ("gpt-5.6-luna", "max"),
+                    ("gpt-6-luna", "max"),
                 )
                 self.assertEqual(
                     route["recommended"]["source"],
-                    "benchmark-prior:bounded_deep_deterministic",
+                    "deterministic-policy:bounded_deep_deterministic",
                 )
 
     def test_bounded_scan_uses_luna_high_or_xhigh_without_forcing_max(self):
@@ -399,13 +458,13 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (normal["recommended"]["model"], normal["recommended"]["effort"]),
-            ("gpt-5.6-luna", "high"),
+            ("gpt-6-luna", "high"),
         )
         self.assertEqual(
             (large["recommended"]["model"], large["recommended"]["effort"]),
-            ("gpt-5.6-luna", "xhigh"),
+            ("gpt-6-luna", "xhigh"),
         )
-        self.assertEqual(large["recommended"]["source"], "benchmark-prior:bounded_scan")
+        self.assertEqual(large["recommended"]["source"], "deterministic-policy:bounded_scan")
 
     def test_infrastructure_failure_does_not_trigger_sol_xhigh(self):
         route = POLICY.select_route(
@@ -416,10 +475,10 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "medium"),
+            ("gpt-6.1-sol", "low"),
         )
 
-    def test_latency_critical_bounded_reasoning_uses_terra_high(self):
+    def test_latency_priority_uses_luna_max_within_gpt6_policy(self):
         route = POLICY.select_route(
             "apply", task_kind="ordinary", risk="low", size="normal",
             ambiguity="low", coupling="medium", verification="deterministic",
@@ -428,7 +487,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-terra", "high"),
+            ("gpt-6-luna", "max"),
         )
 
     def test_high_coupling_bounded_work_stays_with_sol(self):
@@ -439,7 +498,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "medium"),
+            ("gpt-6.1-sol", "medium"),
         )
 
     def test_high_risk_cannot_hide_behind_lower_consequence(self):
@@ -456,7 +515,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-luna", "max"),
+            ("gpt-6-luna", "max"),
         )
         ultra = POLICY.select_route(
             "apply", effort_override="ultra",
@@ -464,10 +523,10 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (ultra["recommended"]["model"], ultra["recommended"]["effort"]),
-            ("gpt-5.6-sol", "ultra"),
+            ("gpt-6.1-sol", "ultra"),
         )
         self.assertEqual(ultra["execution_mode"], "native-ultra")
-        with self.assertRaisesRegex(ValueError, "Luna does not support ultra"):
+        with self.assertRaisesRegex(ValueError, "gpt-6-luna does not support ultra"):
             POLICY.select_route(
                 "apply", model_override="Luna", effort_override="ultra",
                 current=current("gpt-5.6-sol", "medium"),
@@ -485,7 +544,7 @@ class RoutePolicyTests(unittest.TestCase):
                         self.assertNotEqual(route["recommended"]["effort"], "ultra")
                         self.assertEqual(route["execution_mode"], "router-managed")
 
-    def test_automatic_routes_use_only_the_eight_documented_lanes(self):
+    def test_automatic_routes_use_only_the_documented_luna_and_sol_lanes(self):
         observed = set()
         for task_kind in ("mechanical", "ordinary", "complex"):
             for risk in ("low", "normal", "high"):
@@ -500,14 +559,14 @@ class RoutePolicyTests(unittest.TestCase):
                             (route["recommended"]["model"], route["recommended"]["effort"])
                         )
         self.assertTrue(observed.issubset({
-            ("gpt-5.6-luna", "medium"),
-            ("gpt-5.6-luna", "high"),
-            ("gpt-5.6-luna", "xhigh"),
-            ("gpt-5.6-luna", "max"),
-            ("gpt-5.6-terra", "high"),
-            ("gpt-5.6-sol", "medium"),
-            ("gpt-5.6-sol", "high"),
-            ("gpt-5.6-sol", "xhigh"),
+            ("gpt-6-luna", "medium"),
+            ("gpt-6-luna", "high"),
+            ("gpt-6-luna", "xhigh"),
+            ("gpt-6-luna", "max"),
+            ("gpt-6.1-sol", "low"),
+            ("gpt-6.1-sol", "medium"),
+            ("gpt-6.1-sol", "high"),
+            ("gpt-6.1-sol", "xhigh"),
         }))
         self.assertFalse({
             ("gpt-5.6-luna", "low"),
@@ -515,12 +574,18 @@ class RoutePolicyTests(unittest.TestCase):
             ("gpt-5.6-terra", "medium"),
             ("gpt-5.6-sol", "low"),
         } & observed)
+        self.assertTrue(all(model in POLICY.MODELS for model, _ in observed))
 
-    def test_removed_automatic_lanes_remain_explicitly_selectable(self):
-        for model, effort in (
-            ("Luna", "low"), ("Terra", "low"),
-            ("Terra", "medium"), ("Sol", "low"),
-        ):
+    def test_unqualified_model_aliases_resolve_to_gpt6(self):
+        self.assertEqual(POLICY.normalize_model("Luna"), "gpt-6-luna")
+        self.assertEqual(POLICY.normalize_model("Sol"), "gpt-6.1-sol")
+        self.assertEqual(POLICY.normalize_model("GPT-5.6 Luna"), "gpt-5.6-luna")
+        for retired in ("gpt-6-astra", "gpt-6-sol", "Astra"):
+            with self.subTest(retired=retired), self.assertRaises(ValueError):
+                POLICY.normalize_model(retired)
+
+    def test_non_default_gpt6_efforts_remain_explicitly_selectable(self):
+        for model, effort in (("Luna", "low"), ("Sol", "low")):
             with self.subTest(model=model, effort=effort):
                 route = POLICY.select_route(
                     "apply", model_override=model, effort_override=effort,
@@ -528,6 +593,7 @@ class RoutePolicyTests(unittest.TestCase):
                 )
                 self.assertEqual(route["recommended"]["source"], "user-override")
                 self.assertEqual(route["recommended"]["effort"], effort)
+                self.assertIn(route["recommended"]["model"], POLICY.MODELS)
 
     def test_tiny_low_risk_ordinary_defaults_to_luna_high(self):
         route = POLICY.select_route(
@@ -536,11 +602,11 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-luna", "high"),
+            ("gpt-6-luna", "high"),
         )
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
 
-    def test_tiny_latency_critical_ordinary_uses_terra_high(self):
+    def test_tiny_latency_priority_ordinary_uses_luna_max(self):
         route = POLICY.select_route(
             "apply", task_kind="ordinary", risk="low", size="tiny",
             latency_priority="high",
@@ -548,7 +614,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-terra", "high"),
+            ("gpt-6-luna", "max"),
         )
 
     def test_invalid_latency_priority_is_rejected(self):
@@ -560,23 +626,23 @@ class RoutePolicyTests(unittest.TestCase):
     def test_current_target_route_stays_local_without_keep_placeholder(self):
         route = POLICY.select_route(
             "apply", task_kind="mechanical", risk="low", size="tiny",
-            current=current("gpt-5.6-luna", "medium"),
+            current=current("gpt-6-luna", "medium"),
         )
         self.assertEqual(route["execution"]["dispatch"], "local")
         self.assertEqual(route["execution"]["reason"], "route-already-matched")
         self.assertEqual(
             (route["execution"]["model"], route["execution"]["effort"]),
-            ("gpt-5.6-luna", "medium"),
+            ("gpt-6-luna", "medium"),
         )
 
     def test_complex_tiny_task_still_uses_sol(self):
         route = POLICY.select_route("apply", task_kind="complex", risk="normal", size="tiny", current=current())
-        self.assertEqual(route["recommended"]["model"], "gpt-5.6-sol")
+        self.assertEqual(route["recommended"]["model"], "gpt-6.1-sol")
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
 
     def test_spaced_sol_alias_is_supported(self):
-        route = POLICY.select_route("assess", model_override="GPT-5.6 Sol", current=current())
-        self.assertEqual(route["recommended"]["model"], "gpt-5.6-sol")
+        route = POLICY.select_route("assess", model_override="GPT-6.1 Sol", current=current())
+        self.assertEqual(route["recommended"]["model"], "gpt-6.1-sol")
 
     def test_assess_and_retune_defaults_are_fixed_to_sol_high(self):
         cases = (
@@ -592,28 +658,28 @@ class RoutePolicyTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     (route["recommended"]["model"], route["recommended"]["effort"]),
-                    ("gpt-5.6-sol", "high"),
+                    ("gpt-6.1-sol", "high"),
                 )
                 self.assertEqual(route["recommended"]["source"], "fixed-analysis-default")
 
     def test_explicit_user_override_can_replace_fixed_retune_default(self):
         route = POLICY.select_route(
-            "retune", model_override="Terra", effort_override="low",
+            "retune", model_override="Luna", effort_override="low",
             current=current("gpt-5.6-sol", "high"),
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-terra", "low"),
+            ("gpt-6-luna", "low"),
         )
         self.assertEqual(route["recommended"]["source"], "user-override")
 
-    def test_spaced_terra_and_very_high_aliases_are_supported(self):
+    def test_spaced_gpt6_and_very_high_aliases_are_supported(self):
         route = POLICY.select_route(
-            "apply", model_override="GPT-5.6 Terra", effort_override="very high", current=current()
+            "apply", model_override="GPT-6 Luna", effort_override="very high", current=current()
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-terra", "xhigh"),
+            ("gpt-6-luna", "xhigh"),
         )
 
     def test_unknown_original_never_uses_persistent_same_task_switch(self):
@@ -623,32 +689,32 @@ class RoutePolicyTests(unittest.TestCase):
 
     def test_high_risk_apply_uses_sol_high(self):
         route = POLICY.select_route("apply", risk="high", current=current("gpt-5.6-terra", "medium"))
-        self.assertEqual((route["recommended"]["model"], route["recommended"]["effort"]), ("gpt-5.6-sol", "high"))
+        self.assertEqual((route["recommended"]["model"], route["recommended"]["effort"]), ("gpt-6.1-sol", "high"))
 
-    def test_bounded_complex_apply_switches_from_previous_luna_to_sol_medium(self):
+    def test_bounded_complex_apply_switches_from_previous_luna_to_sol_low(self):
         route = POLICY.select_route(
             "apply", task_kind="complex", risk="normal", size="normal",
             current=current("gpt-5.6-luna", "low"),
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "medium"),
+            ("gpt-6.1-sol", "low"),
         )
         self.assertEqual(route["execution"]["dispatch"], "same-task-switch")
-        self.assertTrue(route["restore_required"])
+        self.assertFalse(route["restore_required"])
 
-    def test_high_ambiguity_complex_uses_sol_high(self):
+    def test_high_ambiguity_complex_uses_sol_medium(self):
         route = POLICY.select_route(
             "apply", task_kind="complex", ambiguity="high",
             current=current("gpt-5.6-luna", "low"),
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "high"),
+            ("gpt-6.1-sol", "medium"),
         )
         self.assertEqual(
             route["recommended"]["source"],
-            "benchmark-prior:complex_uncertain_or_high_consequence",
+            "deterministic-policy:complex_uncertain",
         )
 
     def test_failed_complex_attempt_is_the_only_automatic_xhigh_escalation(self):
@@ -659,7 +725,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "xhigh"),
+            ("gpt-6.1-sol", "xhigh"),
         )
 
     def test_legacy_unclassified_failure_does_not_trigger_xhigh(self):
@@ -669,7 +735,7 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             (route["recommended"]["model"], route["recommended"]["effort"]),
-            ("gpt-5.6-sol", "medium"),
+            ("gpt-6.1-sol", "low"),
         )
 
     def test_active_evidence_snapshot_is_exposed_for_audit(self):
@@ -692,7 +758,7 @@ class RoutePolicyTests(unittest.TestCase):
             self.assertEqual(route["routing_evidence"]["status"], "stale")
             self.assertEqual(
                 (route["recommended"]["model"], route["recommended"]["effort"]),
-                ("gpt-5.6-sol", "medium"),
+                ("gpt-6.1-sol", "low"),
             )
             self.assertEqual(
                 route["recommended"]["source"],
@@ -807,15 +873,15 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(
             [(item["model"], item["effort"]) for item in plan["segments"]],
             [
-                ("gpt-5.6-sol", "medium"),
-                ("gpt-5.6-luna", "high"),
-                ("gpt-5.6-luna", "medium"),
+                ("gpt-6.1-sol", "low"),
+                ("gpt-6-luna", "high"),
+                ("gpt-6-luna", "medium"),
             ],
         )
         self.assertEqual(plan["switch_count"], 3)
         self.assertEqual((plan["segment_budget"], plan["switch_budget"]), (4, 4))
         self.assertEqual(plan["budget_source"], "standard")
-        self.assertTrue(plan["restore_required"])
+        self.assertFalse(plan["restore_required"])
         self.assertEqual(len(plan["plan_hash"]), 64)
 
     def test_cursor_validation_accepts_only_exact_next_segment(self):
@@ -851,7 +917,7 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(segment["latency_priority"], "high")
         self.assertEqual(
             (segment["model"], segment["effort"]),
-            ("gpt-5.6-terra", "high"),
+            ("gpt-6-luna", "max"),
         )
         segment["latency_priority"] = "normal"
         with self.assertRaisesRegex(ValueError, "hash mismatch"):
@@ -907,7 +973,7 @@ class RoutePolicyTests(unittest.TestCase):
     def test_single_segment_uses_compact_fast_protocol(self):
         plan = POLICY.plan_apply_segments([
             self.segment("docs", task_kind="mechanical", risk="low", size="tiny")
-        ], current=current("gpt-5.6-luna", "medium"))
+        ], current=current("gpt-6-luna", "medium"))
         self.assertEqual(plan["protocol"], POLICY.FAST_PROTOCOL)
         self.assertFalse(plan["fast_path"]["claim_required"])
         self.assertFalse(plan["fast_path"]["continuation_required"])
@@ -943,7 +1009,7 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(plan["segments"][0]["reason"], "report")
         self.assertEqual(
             (plan["segments"][0]["model"], plan["segments"][0]["effort"], plan["segments"][0]["reason"]),
-            ("gpt-5.6-luna", "low", "report"),
+            ("gpt-6-luna", "low", "report"),
         )
 
     def test_multi_segment_global_report_route_is_rejected(self):
@@ -959,7 +1025,7 @@ class RoutePolicyTests(unittest.TestCase):
         ], current=current(), model_override="Sol", effort_override="high")
         self.assertEqual(
             (plan["segments"][0]["model"], plan["segments"][0]["effort"], plan["segments"][0]["reason"]),
-            ("gpt-5.6-sol", "high", "user-override"),
+            ("gpt-6.1-sol", "high", "user-override"),
         )
 
     def test_adjacent_segments_with_same_route_are_merged(self):
@@ -978,7 +1044,7 @@ class RoutePolicyTests(unittest.TestCase):
             current=current("gpt-5.6-sol", "medium"),
         )
         self.assertEqual(plan["segment_count"], 2)
-        self.assertEqual(plan["switch_count"], 2)
+        self.assertEqual(plan["switch_count"], 1)
 
     def test_tiny_segment_is_routed_independently_from_previous_strong_segment(self):
         segments = [
@@ -989,7 +1055,7 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(plan["segment_count"], 2)
         self.assertEqual(
             [(item["model"], item["effort"]) for item in plan["segments"]],
-            [("gpt-5.6-sol", "medium"), ("gpt-5.6-luna", "medium")],
+            [("gpt-6.1-sol", "low"), ("gpt-6-luna", "medium")],
         )
 
     def test_unknown_original_uses_non_persistent_segment_fallback(self):
@@ -1519,8 +1585,8 @@ class RoutePolicyTests(unittest.TestCase):
 
     def test_parallel_envelope_rejects_rehashed_segment_schema_tampering(self):
         mutations = (
-            ("model", "gpt-5.5", "invalid GPT-5.6 model"),
-            ("model", "gpt-9", "invalid GPT-5.6 model"),
+            ("model", "gpt-5.5", "invalid supported model"),
+            ("model", "gpt-9", "invalid supported model"),
             ("effort", "ultra", "invalid reasoning effort"),
             ("task_kind", "guess", "invalid task_kind"),
         )
@@ -1795,11 +1861,11 @@ class RoutePolicyTests(unittest.TestCase):
 
     def test_segment_override_wins_when_global_is_absent(self):
         plan = POLICY.plan_apply_segments([
-            self.segment("review", model="GPT-5.6 Sol", effort="xhigh")
+            self.segment("review", model="GPT-6.1 Sol", effort="xhigh")
         ], current=current())
         self.assertEqual(
             (plan["segments"][0]["model"], plan["segments"][0]["effort"]),
-            ("gpt-5.6-sol", "xhigh"),
+            ("gpt-6.1-sol", "xhigh"),
         )
 
     def test_explicit_ultra_uses_one_fast_segment_without_router_parallelism(self):
@@ -1814,7 +1880,7 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertTrue(plan["explicit_override"])
         self.assertEqual(
             (segment["model"], segment["effort"]),
-            ("gpt-5.6-sol", "ultra"),
+            ("gpt-6.1-sol", "ultra"),
         )
         self.assertNotIn("do-not-delegate", segment["prohibited_actions"])
         self.assertIn(
@@ -1825,24 +1891,24 @@ class RoutePolicyTests(unittest.TestCase):
         )
         self.assertEqual(selected["effort"], "ultra")
 
-    def test_explicit_terra_ultra_is_supported(self):
+    def test_explicit_gpt6_astra_ultra_is_supported(self):
         plan = POLICY.plan_apply_segments(
-            [self.segment("bounded-terra-ultra")],
-            current=current("gpt-5.6-sol", "medium"),
-            model_override="terra",
+            [self.segment("bounded-astra-ultra")],
+            current=current("gpt-6.1-sol", "medium"),
+            model_override="Sol",
             effort_override="ultra",
         )
         self.assertEqual(
             (plan["segments"][0]["model"], plan["segments"][0]["effort"]),
-            ("gpt-5.6-terra", "ultra"),
+            ("gpt-6.1-sol", "ultra"),
         )
 
     def test_ultra_never_falls_back_to_luna_or_gpt55(self):
-        luna_only = POLICY.resolve_family_fallback(
-            "Terra", "ultra", ["gpt-5.6-luna", "gpt-5.5"]
+        unavailable_gpt6 = POLICY.resolve_family_fallback(
+            "Sol", "ultra", ["gpt-5.6-luna", "gpt-5.5"]
         )
-        self.assertIsNone(luna_only["execution"]["model"])
-        self.assertEqual(luna_only["reason"], "no-supported-model-available")
+        self.assertIsNone(unavailable_gpt6["execution"]["model"])
+        self.assertEqual(unavailable_gpt6["reason"], "no-supported-model-available")
         gpt55_only = POLICY.resolve_family_fallback(
             "Sol", "ultra", ["gpt-5.5"]
         )
@@ -1870,7 +1936,7 @@ class RoutePolicyTests(unittest.TestCase):
             POLICY.plan_apply_segments(
                 [self.segment("review", model="Sol")],
                 current=current(),
-                model_override="Terra",
+                model_override="Luna",
             )
 
     def test_non_linear_dependencies_are_rejected(self):
@@ -1883,9 +1949,10 @@ class RoutePolicyTests(unittest.TestCase):
     def test_standard_budget_rejects_route_thrashing_without_extension_basis(self):
         segments = [
             self.segment("one", model="Luna", effort="low"),
-            self.segment("two", model="Terra", effort="medium"),
-            self.segment("three", model="Sol", effort="high"),
-            self.segment("four", model="Luna", effort="high"),
+            self.segment("two", model="Sol", effort="medium"),
+            self.segment("three", model="Luna", effort="high"),
+            self.segment("four", model="Sol", effort="high"),
+            self.segment("five", model="Sol", effort="medium"),
         ]
         with self.assertRaisesRegex(ValueError, "standard 4/4 budget"):
             POLICY.plan_apply_segments(segments, current=current("gpt-5.6-sol", "medium"))
@@ -1893,34 +1960,34 @@ class RoutePolicyTests(unittest.TestCase):
     def test_complex_plan_automatically_extends_to_six(self):
         segments = [
             self.segment("one", task_kind="complex", model="Luna", effort="low"),
-            self.segment("two", model="Terra", effort="medium"),
+            self.segment("two", model="Sol", effort="medium"),
             self.segment("three", model="Sol", effort="high"),
-            self.segment("four", model="Luna", effort="high"),
-            self.segment("five", model="Terra", effort="low"),
+            self.segment("four", model="Sol", effort="xhigh"),
+            self.segment("five", model="Luna", effort="low"),
         ]
         plan = POLICY.plan_apply_segments(
             segments, current=current("gpt-5.6-sol", "medium")
         )
         self.assertEqual(plan["segment_count"], 5)
-        self.assertEqual(plan["switch_count"], 6)
+        self.assertEqual(plan["switch_count"], 5)
         self.assertEqual((plan["segment_budget"], plan["switch_budget"]), (6, 6))
         self.assertEqual(plan["budget_source"], "adaptive-extended")
 
     def test_high_risk_alone_does_not_trigger_automatic_extension(self):
         segments = [
             self.segment("one", risk="high", model="Luna", effort="low"),
-            self.segment("two", model="Terra", effort="medium"),
+            self.segment("two", model="Sol", effort="medium"),
             self.segment("three", model="Sol", effort="high"),
-            self.segment("four", model="Luna", effort="high"),
-            self.segment("five", model="Terra", effort="low"),
+            self.segment("four", model="Sol", effort="high"),
+            self.segment("five", model="Luna", effort="low"),
         ]
         with self.assertRaisesRegex(ValueError, "complex or large Segment"):
             POLICY.plan_apply_segments(segments, current=current("gpt-5.6-sol", "medium"))
 
     def test_user_can_override_budgets_up_to_hard_limit(self):
         routes = [
-            ("Luna", "low"), ("Terra", "medium"), ("Sol", "high"),
-            ("Luna", "high"), ("Terra", "low"), ("Sol", "xhigh"),
+            ("Luna", "low"), ("Sol", "medium"), ("Sol", "high"),
+            ("Luna", "high"), ("Sol", "low"), ("Sol", "xhigh"),
             ("Luna", "medium"),
         ]
         segments = [
@@ -1934,7 +2001,7 @@ class RoutePolicyTests(unittest.TestCase):
             max_switches=8,
         )
         self.assertEqual(plan["segment_count"], 7)
-        self.assertEqual(plan["switch_count"], 8)
+        self.assertEqual(plan["switch_count"], 7)
         self.assertEqual(plan["budget_source"], "user-override")
         self.assertTrue(plan["explicit_override"])
         self.assertEqual((plan["hard_max_segments"], plan["hard_max_switches"]), (8, 8))
@@ -1944,12 +2011,12 @@ class RoutePolicyTests(unittest.TestCase):
         synthetic["status"] = "synthetic"
         segments = [
             self.segment("one", model="Luna", effort="low"),
-            self.segment("two", model="Terra", effort="medium"),
+            self.segment("two", model="Sol", effort="medium"),
             self.segment("three", model="Sol", effort="high"),
         ]
         plan = POLICY.plan_apply_segments(segments, current=synthetic)
-        self.assertEqual(plan["switch_count"], 4)
-        self.assertTrue(plan["restore_required"])
+        self.assertEqual(plan["switch_count"], 3)
+        self.assertFalse(plan["restore_required"])
         self.assertEqual(plan["original"], {
             "model": "gpt-5.6-sol", "effort": "medium"
         })
@@ -1966,7 +2033,7 @@ class RoutePolicyTests(unittest.TestCase):
             POLICY.plan_apply_segments(
                 [
                     self.segment("one", model="Luna", effort="low"),
-                    self.segment("two", model="Terra", effort="medium"),
+                    self.segment("two", model="Sol", effort="medium"),
                 ],
                 current=current("gpt-5.6-sol", "medium"),
                 max_segments=1,

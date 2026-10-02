@@ -164,10 +164,12 @@ for phrase in (
     if phrase not in readme_zh_text:
         fail(f"Chinese routing overview or release note is missing: {phrase}")
 for model_contract in (
-    "Luna/medium", "Luna/high", "Luna/xhigh", "Luna/max",
-    "Terra/high", "Sol/low", "Sol/medium", "Sol/high", "Sol/xhigh",
+    "GPT-6 Luna/medium", "GPT-6 Luna/high", "GPT-6 Luna/xhigh", "GPT-6 Luna/max",
+    "GPT-6 Luna/max: large deterministic deep work with low-to-normal consequence and the `latency_priority` compatibility lane.",
+    "GPT-6.1 Sol/low", "GPT-6.1 Sol/medium",
+    "GPT-6.1 Sol/high", "GPT-6.1 Sol/xhigh",
     "Never select Ultra automatically",
-    "GPT-5.5 is allowed only after the complete GPT-5.6 family is proven unavailable",
+    "GPT-5.5 is never an availability fallback",
 ):
     if model_contract not in skill_text:
         fail(f"model gradient is missing: {model_contract}")
@@ -190,8 +192,8 @@ for invariant in (
     "absolute 8/8 hard limit",
     "A failed segment stops the plan",
     "`RETURN` is terminal",
-    "GPT-5.5 is legal only after the capability check proves the complete GPT-5.6 family unavailable",
-    "A non-5.6 original is audit-only after verified GPT-5.6 execution",
+    "GPT-5.5 is never an availability fallback",
+    "A non-routable original, including GPT-5.6, is audit-only after verified routed execution",
     "`apply-fast-v1` has no cursor",
     "observed total slots - coordinator - running tasks",
     "scripts/router_runtime.py begin",
@@ -240,7 +242,7 @@ for parallel_ledger_contract in (
 if '"worker_time_compression_percent"' in ledger_text:
     fail("obsolete worker time compression metric remains in the public ledger output")
 policy_text = (ROOT / "scripts" / "route_policy.py").read_text(encoding="utf-8")
-for contract in ("CODEX_THREAD_ID", "thread_settings_applied", "turn_context", "route-already-matched", "selectable-subagent-or-local", "apply-fast-v1", "segmented-v1", "dependency-parallel-v1", "DEFAULT_AUTO_PARALLELISM", "HARD_MAX_PARALLELISM", "parallelism_source", "capacity_evaluation", "smart-reduced", "runtime_total_slots", "coordinator_reserved_slots", "available_worker_slots", "context_capsule", "critical-path-priority-wait-any", "write_scopes", "conflict_keys", "stop-dispatch-drain-running", "validate_fast_envelope", "validate_parallel_envelope", "DEFAULT_MAX_SEGMENTS", "EXTENDED_MAX_SEGMENTS", "HARD_MAX_SEGMENTS", "HARD_MAX_SWITCHES", "budget_source", "plan_hash", "attempt_id", "validate_segment_cursor", "synthetic-test-input", "load_benchmark_evidence", "evidence-snapshot-expired", "prior_failure", "resolve_family_fallback", "gpt56-family-unavailable"):
+for contract in ("CODEX_THREAD_ID", "thread_settings_applied", "turn_context", "route-already-matched", "selectable-subagent-or-local", "apply-fast-v1", "segmented-v1", "dependency-parallel-v1", "DEFAULT_AUTO_PARALLELISM", "HARD_MAX_PARALLELISM", "parallelism_source", "capacity_evaluation", "smart-reduced", "runtime_total_slots", "coordinator_reserved_slots", "available_worker_slots", "context_capsule", "critical-path-priority-wait-any", "write_scopes", "conflict_keys", "stop-dispatch-drain-running", "validate_fast_envelope", "validate_parallel_envelope", "DEFAULT_MAX_SEGMENTS", "EXTENDED_MAX_SEGMENTS", "HARD_MAX_SEGMENTS", "HARD_MAX_SWITCHES", "budget_source", "plan_hash", "attempt_id", "validate_segment_cursor", "synthetic-test-input", "load_benchmark_evidence", "evidence-snapshot-expired", "prior_failure", "resolve_family_fallback"):
     if contract not in policy_text:
         fail(f"route policy contract is missing: {contract}")
 
@@ -348,7 +350,7 @@ if evidence.get("schema_version") != 1 or not evidence.get("snapshot_id"):
 if evidence.get("runtime_network_required") is not False:
     fail("benchmark evidence must remain offline at runtime")
 if evidence.get("policy", {}).get("gpt55_fallback_requires_gpt56_family_unavailable") is not True:
-    fail("benchmark evidence does not protect the GPT-5.6 family fallback rule")
+    fail("historical benchmark snapshot lost its GPT-5.6 fallback contract")
 for key in (
     "max_is_single_route_effort",
     "ultra_is_separate_orchestration_mode",
@@ -364,9 +366,9 @@ for key in (
     if evidence.get("policy", {}).get(key) is not True:
         fail(f"benchmark evidence policy is missing: {key}")
 if evidence.get("policy", {}).get("automatic_lane_count") != 8:
-    fail("benchmark evidence automatic lane count must be eight")
+    fail("historical GPT-5.6 snapshot lane count must remain eight")
 if len(evidence.get("routing_lanes", {})) != 8:
-    fail("benchmark evidence must expose exactly eight automatic lanes")
+    fail("historical GPT-5.6 snapshot must retain its eight lanes")
 if len(evidence.get("sources", [])) < 11:
     fail("benchmark evidence does not contain enough attributable sources")
 if len(evidence.get("effort_profiles", {}).get("metrics", [])) < 18:
@@ -378,19 +380,16 @@ if len(evidence.get("chatbench_v0_2_0", {}).get("coding_proxy_results", [])) != 
 if "GPT-5.5" not in (ROOT / "references" / "benchmark-evidence.md").read_text(encoding="utf-8"):
     fail("benchmark evidence report is missing the GPT-5.5 comparison")
 
-models = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-5.6-luna"}
+models = [
+    ("gpt61_sol", "gpt61-sol", "gpt-6.1-sol"),
+    ("gpt6_luna", "gpt6-luna", "gpt-6-luna"),
+]
 router_count = 0
 executor_count = 0
-for tier, model in models.items():
+for tier, filename_tier, model in models:
     for effort in ("low", "medium", "high", "xhigh", "max"):
-        if tier == "sol" and effort == "medium":
-            name = "codex-auto-model-router.toml"
-        elif effort == "medium":
-            name = f"codex-auto-model-router-{tier}.toml"
-        elif tier == "sol":
-            name = f"codex-auto-model-router-{effort}.toml"
-        else:
-            name = f"codex-auto-model-router-{tier}-{effort}.toml"
+        suffix = "" if effort == "medium" else f"-{effort}"
+        name = f"codex-auto-model-router-{filename_tier}{suffix}.toml"
         data = tomllib.loads((ROOT / "codex-agents" / name).read_text(encoding="utf-8"))
         if data.get("name") != Path(name).stem.replace("-", "_"):
             fail(f"incorrect preset name: {name}")
@@ -404,14 +403,7 @@ for tier, model in models.items():
             fail(f"router preset mapping is missing: {name}")
         router_count += 1
 
-        if tier == "sol" and effort == "medium":
-            executor_name = "codex-auto-model-executor.toml"
-        elif effort == "medium":
-            executor_name = f"codex-auto-model-executor-{tier}.toml"
-        elif tier == "sol":
-            executor_name = f"codex-auto-model-executor-{effort}.toml"
-        else:
-            executor_name = f"codex-auto-model-executor-{tier}-{effort}.toml"
+        executor_name = f"codex-auto-model-executor-{filename_tier}{suffix}.toml"
         executor = tomllib.loads(
             (ROOT / "codex-agents" / executor_name).read_text(encoding="utf-8")
         )
@@ -435,8 +427,20 @@ for tier, model in models.items():
             fail(f"executor preset mapping is missing: {executor_name}")
         executor_count += 1
 
-if router_count != 15 or executor_count != 15:
-    fail(f"expected 15 router and 15 executor presets, found {router_count} and {executor_count}")
+if router_count != 10 or executor_count != 10:
+    fail(f"expected 10 GPT-6.1 Sol and Luna router and executor presets, found {router_count} and {executor_count}")
+if any("astra" in path.name or "gpt6-sol" in path.name for path in (ROOT / "codex-agents").glob("codex-auto-model-*.toml")):
+    fail("retired Astra or GPT-6 Sol presets must not be distributed")
+if list((ROOT / "codex-agents").glob("codex-auto-model-router*.toml")) and any(
+    "gpt-5.6" in path.read_text(encoding="utf-8")
+    for path in (ROOT / "codex-agents").glob("codex-auto-model-router*.toml")
+):
+    fail("GPT-5.6 router presets must not be distributed")
+if list((ROOT / "codex-agents").glob("codex-auto-model-executor*.toml")) and any(
+    "gpt-5.6" in path.read_text(encoding="utf-8")
+    for path in (ROOT / "codex-agents").glob("codex-auto-model-executor*.toml")
+):
+    fail("GPT-5.6 executor presets must not be distributed")
 if list((ROOT / "codex-agents").glob("*ultra*.toml")):
     fail("Ultra must remain explicit and must not have a Router or executor preset")
 
@@ -477,4 +481,4 @@ for forbidden in ("s" + "k-" + "live", "BEGIN " + "PRIVATE KEY", "api" + "_key")
         ):
             fail(f"possible secret marker {forbidden!r} in {path}")
 
-print("distribution OK: skill metadata, UI metadata, 15 router presets, 15 executor presets, no obvious secrets")
+print("distribution OK: skill metadata, UI metadata, 10 GPT-6 router presets, 10 GPT-6 executor presets, no obvious secrets")

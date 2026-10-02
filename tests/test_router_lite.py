@@ -16,7 +16,7 @@ LITE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(LITE)
 
 
-def reusable_candidate(name, model="gpt-5.6-luna", effort="high", **overrides):
+def reusable_candidate(name, model="gpt-6-luna", effort="high", **overrides):
     candidate = {
         "agent_task_name": name,
         "model": model,
@@ -96,7 +96,7 @@ class RouterLiteTests(unittest.TestCase):
         return json.loads(stream.getvalue())
 
     def test_matching_route_runs_locally_without_restore(self):
-        current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-luna", "effort": "medium"}
+        current = {"status": "verified", "thread_id": "t", "model": "gpt-6-luna", "effort": "medium"}
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(LITE.decide, self.args(task_kind="mechanical"))
         self.assertEqual(result["action"], "local")
@@ -108,7 +108,7 @@ class RouterLiteTests(unittest.TestCase):
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(LITE.decide, self.args(task_kind="mechanical"))
         self.assertEqual(result["action"], "delegate")
-        self.assertEqual(result["agent_type"], "codex_auto_model_executor_luna")
+        self.assertEqual(result["agent_type"], "codex_auto_model_executor_gpt6_luna")
         self.assertEqual(result["spawn_contract"]["fork_turns"], "none")
         self.assertFalse(result["spawn_contract"]["retry_on_contract_error"])
         self.assertTrue(result["record_contract"]["required_after_execution"])
@@ -137,7 +137,7 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual((result["model"], result["effort"]), ("gpt-5.6-sol", "high"))
         self.assertEqual(
             result["recommended_route"],
-            {"model": "gpt-5.6-luna", "effort": "medium"},
+            {"model": "gpt-6-luna", "effort": "medium"},
         )
         self.assertIsNone(result["agent_type"])
         self.assertIsNone(result["spawn_contract"])
@@ -453,7 +453,7 @@ class RouterLiteTests(unittest.TestCase):
         self.assertFalse(idle["should_interrupt"])
 
     def test_short_ordinary_work_stays_local_on_sufficient_current_route(self):
-        current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-sol", "effort": "high"}
+        current = {"status": "verified", "thread_id": "t", "model": "gpt-6.1-sol", "effort": "high"}
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(
                 LITE.decide,
@@ -474,21 +474,21 @@ class RouterLiteTests(unittest.TestCase):
                 self.args(task_kind="complex", estimated_seconds=60),
             )
         self.assertEqual(result["action"], "delegate")
-        self.assertEqual(result["model"], "gpt-5.6-sol")
+        self.assertEqual(result["model"], "gpt-6.1-sol")
 
-    def test_tiny_mechanical_work_uses_current_gpt56_locally(self):
-        current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-sol", "effort": "high"}
+    def test_tiny_mechanical_work_uses_current_gpt6_locally(self):
+        current = {"status": "verified", "thread_id": "t", "model": "gpt-6.1-sol", "effort": "high"}
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(LITE.decide, self.args(task_kind="mechanical", size="tiny", risk="low"))
         self.assertEqual(result["action"], "local")
-        self.assertEqual((result["model"], result["effort"]), ("gpt-5.6-sol", "high"))
-        self.assertEqual(result["recommended_route"], {"model": "gpt-5.6-luna", "effort": "medium"})
+        self.assertEqual((result["model"], result["effort"]), ("gpt-6.1-sol", "high"))
+        self.assertEqual(result["recommended_route"], {"model": "gpt-6-luna", "effort": "medium"})
         self.assertEqual(result["reason"], "tiny-local-fast-path")
 
     def test_weaker_current_route_cannot_bypass_tiny_or_tool_bound_recommendation(self):
         weak = {
             "status": "verified", "thread_id": "t",
-            "model": "gpt-5.6-luna", "effort": "low",
+            "model": "gpt-6-luna", "effort": "low",
         }
         with patch.object(LITE.policy, "detect_current_route", return_value=weak):
             tiny = self.output(
@@ -505,7 +505,7 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(tiny["action"], "delegate")
         self.assertEqual(tiny["recommended_route"]["effort"], "medium")
         self.assertEqual(tool_bound["action"], "delegate")
-        self.assertEqual(tool_bound["recommended_route"]["model"], "gpt-5.6-sol")
+        self.assertEqual(tool_bound["recommended_route"]["model"], "gpt-6.1-sol")
 
     def test_sequential_decide_reuses_exact_route_with_bound_identity(self):
         current = {
@@ -559,8 +559,8 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(review_result["action"], "delegate")
         self.assertIn("fresh_context_required", review_result["reuse_policy"]["task_exclusions"])
 
-    def test_tool_bound_work_uses_current_gpt56_locally(self):
-        current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-sol", "effort": "medium"}
+    def test_tool_bound_work_uses_current_gpt6_locally(self):
+        current = {"status": "verified", "thread_id": "t", "model": "gpt-6-luna", "effort": "medium"}
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(
                 LITE.decide,
@@ -570,11 +570,11 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(result["reason"], "tool-bound-local-fast-path")
 
     def test_explicit_route_bypasses_local_cost_fast_path(self):
-        current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-sol", "effort": "high"}
+        current = {"status": "verified", "thread_id": "t", "model": "gpt-6.1-sol", "effort": "high"}
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(
                 LITE.decide,
-                self.args(task_kind="mechanical", size="tiny", risk="low", model="gpt-5.6-luna", effort="medium"),
+                self.args(task_kind="mechanical", size="tiny", risk="low", model="gpt-6-luna", effort="medium"),
             )
         self.assertEqual(result["action"], "delegate")
 
@@ -607,13 +607,13 @@ class RouterLiteTests(unittest.TestCase):
         ]
         current = {
             "status": "verified", "thread_id": "t",
-            "model": "gpt-5.6-luna", "effort": "high",
+            "model": "gpt-6-luna", "effort": "high",
         }
         with patch.object(LITE.policy, "detect_current_route", return_value=current):
             result = self.output(LITE.plan, self.plan_args(tasks))
         self.assertTrue(result["parallel"])
         self.assertTrue(all(
-            item["leaf_agent_type"] == "codex_auto_model_executor_luna_high"
+            item["leaf_agent_type"] == "codex_auto_model_executor_gpt6_luna_high"
             for item in result["tasks"]
         ))
 
@@ -686,7 +686,7 @@ class RouterLiteTests(unittest.TestCase):
             {"task_name": "two", "estimated_seconds": 90},
         ]
         candidates = [
-            reusable_candidate("sol_agent", model="gpt-5.6-sol", effort="high"),
+            reusable_candidate("sol_agent", model="gpt-6.1-sol", effort="high"),
         ]
         args = self.plan_args(tasks, reuse_candidates_json=json.dumps(candidates))
         with patch.object(LITE.policy, "detect_current_route", return_value=LITE.policy.unavailable_current()):
@@ -713,7 +713,7 @@ class RouterLiteTests(unittest.TestCase):
             {"task_name": "two", "estimated_seconds": 120},
         ]
         candidates = [
-            {"agent_task_name": "prior", "model": "gpt-5.6-luna", "effort": "high"},
+            {"agent_task_name": "prior", "model": "gpt-6-luna", "effort": "high"},
         ]
         args = self.plan_args(tasks, reuse_candidates_json=json.dumps(candidates))
         with patch.object(LITE.policy, "detect_current_route", return_value=LITE.policy.unavailable_current()):
@@ -788,9 +788,9 @@ class RouterLiteTests(unittest.TestCase):
 
     def test_route_change_uses_fresh_executor_instead_of_reuse(self):
         tasks = [
-            {"task_name": "luna", "estimated_seconds": 200, "model": "gpt-5.6-luna", "effort": "high"},
-            {"task_name": "sol", "estimated_seconds": 190, "model": "gpt-5.6-sol", "effort": "high"},
-            {"task_name": "terra", "estimated_seconds": 180, "model": "gpt-5.6-terra", "effort": "high"},
+            {"task_name": "luna", "estimated_seconds": 200, "model": "gpt-6-luna", "effort": "high"},
+            {"task_name": "sol", "estimated_seconds": 190, "model": "gpt-6.1-sol", "effort": "high"},
+            {"task_name": "sol-low", "estimated_seconds": 180, "model": "gpt-6.1-sol", "effort": "low"},
         ]
         args = self.plan_args(tasks, max_total_tasks=3, available_worker_slots=2)
         with patch.object(LITE.policy, "detect_current_route", return_value=LITE.policy.unavailable_current()):
@@ -931,7 +931,7 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         payload = json.loads(result.stdout)
         self.assertNotIn("warning", payload)
-        self.assertEqual(payload["recommended_route"]["model"], "gpt-5.6-luna")
+        self.assertEqual(payload["recommended_route"]["model"], "gpt-6-luna")
 
     def test_cli_unknown_argument_fails_open_with_success_exit(self):
         result = subprocess.run(

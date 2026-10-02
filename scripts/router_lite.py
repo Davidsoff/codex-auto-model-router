@@ -47,21 +47,13 @@ EXECUTOR_INTERRUPTIBLE_STATE = "running"
 EFFORT_RANK = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 
 AGENT_TYPES = {
-    ("gpt-5.6-sol", "low"): "codex_auto_model_executor_low",
-    ("gpt-5.6-sol", "medium"): "codex_auto_model_executor",
-    ("gpt-5.6-sol", "high"): "codex_auto_model_executor_high",
-    ("gpt-5.6-sol", "xhigh"): "codex_auto_model_executor_xhigh",
-    ("gpt-5.6-sol", "max"): "codex_auto_model_executor_max",
-    ("gpt-5.6-terra", "low"): "codex_auto_model_executor_terra_low",
-    ("gpt-5.6-terra", "medium"): "codex_auto_model_executor_terra",
-    ("gpt-5.6-terra", "high"): "codex_auto_model_executor_terra_high",
-    ("gpt-5.6-terra", "xhigh"): "codex_auto_model_executor_terra_xhigh",
-    ("gpt-5.6-terra", "max"): "codex_auto_model_executor_terra_max",
-    ("gpt-5.6-luna", "low"): "codex_auto_model_executor_luna_low",
-    ("gpt-5.6-luna", "medium"): "codex_auto_model_executor_luna",
-    ("gpt-5.6-luna", "high"): "codex_auto_model_executor_luna_high",
-    ("gpt-5.6-luna", "xhigh"): "codex_auto_model_executor_luna_xhigh",
-    ("gpt-5.6-luna", "max"): "codex_auto_model_executor_luna_max",
+    (model, effort): (
+        policy.MODEL_CATALOG[model]["preset_stem"]
+        if effort == "medium"
+        else f'{policy.MODEL_CATALOG[model]["preset_stem"]}_{effort}'
+    )
+    for model in policy.MODELS
+    for effort in policy.MODEL_CATALOG[model]["routable_efforts"]
 }
 
 
@@ -238,25 +230,21 @@ def project_status(args):
 
 
 def _route_is_sufficient(current, selected):
-    """Return whether the current GPT-5.6 route is an accepted policy fallback."""
+    """Accept a current route when the selected lane's fallback policy covers it."""
     if current.get("status") != "verified":
         return False
     current_model = current.get("model")
     current_effort = current.get("effort")
-    target_model = selected["recommended"]["model"]
-    target_effort = selected["recommended"]["effort"]
+    fallback_chain = selected.get("fallback", {}).get("fallback_chain", [])
     if current_model not in policy.MODELS:
         return False
-    if current_effort not in EFFORT_RANK or target_effort not in EFFORT_RANK:
+    if current_effort not in EFFORT_RANK:
         return False
-    candidates = [(target_model, target_effort)]
-    source = selected["recommended"].get("source", "")
-    if source.startswith("benchmark-prior:"):
-        lane = source.split(":", 1)[1]
-        candidates.extend(policy.LANE_FALLBACK_ROUTES.get(lane, ()))
     return any(
-        current_model == model and EFFORT_RANK[current_effort] >= EFFORT_RANK[effort]
-        for model, effort in candidates
+        candidate.get("model") == current_model
+        and candidate.get("effort") in EFFORT_RANK
+        and EFFORT_RANK[current_effort] >= EFFORT_RANK[candidate["effort"]]
+        for candidate in fallback_chain
     )
 
 
@@ -298,9 +286,14 @@ def _decision(args, task=None, current=None):
         prior_failure=task.get("prior_failure", args.prior_failure),
         prior_failure_kind=task.get("prior_failure_kind", args.prior_failure_kind),
         latency_priority=task.get("latency_priority", args.latency_priority),
+        available_models=task.get(
+            "available_models", getattr(args, "available_model", None)
+        ),
     )
-    model = selected["recommended"]["model"]
-    effort = selected["recommended"]["effort"]
+    preferred_model = selected["recommended"]["model"]
+    preferred_effort = selected["recommended"]["effort"]
+    model = selected["execution"]["model"]
+    effort = selected["execution"]["effort"]
     explicit_route = bool(task.get("model", args.model) or task.get("effort", args.effort))
     task_kind = task.get("task_kind", args.task_kind)
     risk = task.get("risk", args.risk)
@@ -316,14 +309,14 @@ def _decision(args, task=None, current=None):
     min_delegate_seconds = int(getattr(args, "min_delegate_seconds", DEFAULT_MIN_DELEGATE_SECONDS))
     if min_delegate_seconds < 0:
         raise ValueError("minimum delegate seconds cannot be negative")
-    current_is_gpt56 = str(current.get("model", "")).startswith("gpt-5.6-")
+    current_is_supported = current.get("model") in policy.MODELS
     current_is_sufficient = _route_is_sufficient(current, selected)
     subagent_policy = _subagent_policy(args)
     subagents_allowed = subagent_policy["allowed"]
     short_work = estimated_seconds is not None and estimated_seconds < min_delegate_seconds
     local_cost_fast_path = (
         current.get("status") == "verified"
-        and current_is_gpt56
+        and current_is_supported
         and not explicit_route
         and not task.get("prior_failure", args.prior_failure)
         and risk != "high"
@@ -338,7 +331,7 @@ def _decision(args, task=None, current=None):
     matched = current.get("status") == "verified" and (
         current.get("model"), current.get("effort")
     ) == (model, effort)
-    ultra = effort == "ultra"
+    ultra = preferred_effort == "ultra"
     route_differs = not matched
     route_benefit_clear = (
         route_differs
@@ -376,6 +369,9 @@ def _decision(args, task=None, current=None):
         elif matched:
             action = "local"
             reason = "already-matched"
+        elif model is None:
+            action = "local"
+            reason = "no-supported-model-available"
         elif subagents_allowed and route_benefit_clear:
             action = "delegate"
             reason = selected["recommended"]["source"]
@@ -396,12 +392,23 @@ def _decision(args, task=None, current=None):
             actual_model = model
             actual_effort = effort
     agent_type = None if action != "delegate" else AGENT_TYPES.get((model, effort))
+    if action == "delegate" and agent_type is None:
+        action = "local"
+        reason = "preset-unavailable-fail-open"
+        actual_model = (
+            current.get("model") if current.get("status") == "verified" else None
+        )
+        actual_effort = (
+            current.get("effort") if current.get("status") == "verified" else None
+        )
     lifecycle_contract = _lifecycle_contract(args)
     if action == "local":
         if reason == "already-matched":
             execution_reason = "current-route-already-matches"
         elif reason == "subagents-disabled-by-user":
             execution_reason = "main-thread-model-fixed-and-subagents-disabled"
+        elif reason == "preset-unavailable-fail-open":
+            execution_reason = "requested leaf preset is unavailable"
         else:
             execution_reason = (
                 "main-model-fixed-leaf-startup-cost-exceeds-benefit"
@@ -426,7 +433,9 @@ def _decision(args, task=None, current=None):
                 "finalize_immediately_after_acceptance": True,
             }
         ),
-        "recommended_route": {"model": model, "effort": effort},
+        "recommended_route": {"model": preferred_model, "effort": preferred_effort},
+        "preferred_route": {"model": preferred_model, "effort": preferred_effort},
+        "fallback": selected["fallback"],
         "reason": reason,
         "execution_reason": execution_reason,
         "current": current,
@@ -765,7 +774,7 @@ def _reuse_candidates(value, max_reuses, identity):
         model = policy.normalize_model(item.get("model"))
         effort = policy.normalize_effort(item.get("effort"))
         if model not in policy.MODELS or effort not in EFFORT_RANK:
-            raise ValueError("reuse candidate requires a supported GPT-5.6 route")
+            raise ValueError("reuse candidate requires a supported catalog route")
         followups_used = item.get("followups_used", 0)
         if not isinstance(followups_used, int) or followups_used < 0:
             raise ValueError("reuse candidate followups_used must be a non-negative integer")
@@ -1180,6 +1189,10 @@ def _add_route_arguments(parser):
     )
     parser.add_argument("--model")
     parser.add_argument("--effort")
+    parser.add_argument(
+        "--available-model", action="append",
+        help="Complete available-model surface; omission means availability is unknown",
+    )
     parser.add_argument("--sessions-root", type=Path)
     parser.add_argument("--no-runtime-detection", action="store_true")
     parser.add_argument(
