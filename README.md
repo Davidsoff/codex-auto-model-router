@@ -46,7 +46,7 @@ cd codex-auto-model-router
 ./install.sh
 ```
 
-Restart Codex after installation.
+Restart Codex after installation. To also install the global prompt hook, opt in with `./install.sh --install-hook` (PowerShell: `./install.ps1 -InstallHook`). The hook asks Codex to apply the Skill when relevant; it does not change the active conversation's model. Use `/hooks` to review, trust, or disable it, then restart Codex.
 
 ## Exit for one project
 

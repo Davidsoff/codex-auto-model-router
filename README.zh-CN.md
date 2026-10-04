@@ -46,7 +46,7 @@ cd codex-auto-model-router
 ./install.sh
 ```
 
-安装后重启 Codex。
+安装后重启 Codex。若还要安装全局提示钩子，请使用 `./install.sh --install-hook`（PowerShell：`./install.ps1 -InstallHook`）。该钩子会提示 Codex 在适用时使用此 Skill，但不会更改当前对话的模型。使用 `/hooks` 审核、信任或停用钩子，然后重启 Codex。
 
 ## 退出当前项目
 

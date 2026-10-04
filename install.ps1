@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$InstallHook)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -8,11 +8,14 @@ $skillsRoot = Join-Path $codexHome 'skills'
 $skillTarget = Join-Path $skillsRoot 'codex-auto-model-router'
 $legacySkillTarget = Join-Path $skillsRoot 'codex-model-router'
 $agentTarget = Join-Path $codexHome 'agents'
+$hookConfig = Join-Path $codexHome 'hooks.json'
 $stageRoot = $null
 $backupRoot = $null
 $skillSwapped = $false
 $legacySkillMoved = $false
 $agentsChanged = $false
+$hookConfigChanged = $false
+$hookConfigExisted = $false
 $completed = $false
 
 $legacyPresets = @(
@@ -116,12 +119,38 @@ try {
     Get-ChildItem -LiteralPath $stagedAgents -File -Filter '*.toml' | Move-Item -Destination $agentTarget
     Invoke-InjectedFailure 'after-agent-swap'
 
+    if ($InstallHook) {
+        $hookItem = Get-Item -LiteralPath $hookConfig -Force -ErrorAction SilentlyContinue
+        if ($null -ne $hookItem) {
+            if ($hookItem.PSIsContainer -or $hookItem.LinkType) { throw "Refusing to replace non-regular hook config: $hookConfig" }
+            Copy-Item -LiteralPath $hookConfig -Destination (Join-Path $backupRoot 'hooks.json')
+            $hookConfigExisted = $true
+        }
+        $hookConfigChanged = $true
+        $python = Get-Command 'python3' -ErrorAction SilentlyContinue
+        if (-not $python) { $python = Get-Command 'python' -ErrorAction SilentlyContinue }
+        if ($python) {
+            & $python.Source (Join-Path $skillTarget 'scripts/configure_user_hook.py') --codex-home $codexHome
+        } else {
+            $pythonLauncher = Get-Command 'py' -ErrorAction SilentlyContinue
+            if (-not $pythonLauncher) { throw 'Python 3 is required to install the prompt hook.' }
+            & $pythonLauncher.Source -3 (Join-Path $skillTarget 'scripts/configure_user_hook.py') --codex-home $codexHome
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Prompt hook registration failed with exit code $LASTEXITCODE" }
+        Invoke-InjectedFailure 'after-hook-install'
+    }
+
     $completed = $true
     Write-Output "Installed codex-auto-model-router into $codexHome"
     Write-Output 'Reconciled this project''s skill and custom-agent presets; migrated legacy names when present.'
+    if ($InstallHook) { Write-Output 'Installed the global UserPromptSubmit hook. Review and trust it with /hooks, then restart Codex.' }
     Write-Output 'Restart Codex to refresh skills and custom agents.'
 }
 catch {
+    if ($hookConfigChanged) {
+        Remove-Item -LiteralPath $hookConfig -Force -ErrorAction SilentlyContinue
+        if ($hookConfigExisted) { Move-Item -LiteralPath (Join-Path $backupRoot 'hooks.json') -Destination $hookConfig -Force }
+    }
     if ($agentsChanged) { Restore-OwnedAgents }
     if ($skillSwapped) {
         Remove-Item -LiteralPath $skillTarget -Recurse -Force -ErrorAction SilentlyContinue
