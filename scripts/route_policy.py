@@ -8,6 +8,7 @@ import json
 import os
 import posixpath
 import re
+import tomllib
 import unicodedata
 import uuid
 from datetime import date, timedelta
@@ -18,8 +19,13 @@ RUNTIME_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "
 ROUTED_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 GPT55_MODEL = "gpt-5.5"
 GPT56_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
-HISTORICAL_GPT6_MODELS = ("gpt-6-astra", "gpt-6-sol")
+HISTORICAL_GPT6_MODELS = ("gpt-6-sol",)
 MODEL_CATALOG = {
+    "gpt-6-astra": {
+        "role": "frontier",
+        "routable_efforts": ROUTED_EFFORTS, "ultra_eligible": False,
+        "preset_stem": "codex_auto_model_executor_gpt6_astra",
+    },
     "gpt-6.1-sol": {
         "role": "strong",
         "routable_efforts": ROUTED_EFFORTS, "ultra_eligible": True,
@@ -54,6 +60,33 @@ CANONICAL_ROUTING_LANES = {
     lane: {"model": ROLE_PREFERRED_MODELS[value["role"]], "effort": value["effort"]}
     for lane, value in TASK_LANES.items()
 }
+ROUTING_PROFILES = {
+    "economy": {
+        "mechanical_default": {"model": "gpt-6-luna", "effort": "medium"},
+        "ordinary_default": {"model": "gpt-6-luna", "effort": "high"},
+        "bounded_scan": {"model": "gpt-6-luna", "effort": "xhigh"},
+        "bounded_deep_deterministic": {"model": "gpt-6-luna", "effort": "max"},
+        "latency_priority": {"model": "gpt-6-luna", "effort": "max"},
+        "complex_bounded": {"model": "gpt-6-luna", "effort": "high"},
+        "complex_uncertain": {"model": "gpt-6-luna", "effort": "xhigh"},
+        "high_consequence": {"model": "gpt-6-luna", "effort": "max"},
+        "complex_failed_escalation": {"model": "gpt-6-luna", "effort": "max"},
+    },
+    "balanced": CANONICAL_ROUTING_LANES,
+    "quality": {
+        "mechanical_default": {"model": "gpt-6-luna", "effort": "medium"},
+        "ordinary_default": {"model": "gpt-6.1-sol", "effort": "medium"},
+        "bounded_scan": {"model": "gpt-6.1-sol", "effort": "high"},
+        "bounded_deep_deterministic": {"model": "gpt-6.1-sol", "effort": "xhigh"},
+        "latency_priority": {"model": "gpt-6.1-sol", "effort": "low"},
+        "complex_bounded": {"model": "gpt-6.1-sol", "effort": "low"},
+        "complex_uncertain": {"model": "gpt-6.1-sol", "effort": "medium"},
+        "high_consequence": {"model": "gpt-6-astra", "effort": "high"},
+        "complex_failed_escalation": {"model": "gpt-6-astra", "effort": "xhigh"},
+    },
+}
+DEFAULT_ROUTING_PROFILE = "balanced"
+ROUTING_CONFIG_SCHEMA_VERSION = 1
 
 # Immutable GPT-5.6-only benchmark contract. It supplies provenance for the
 # legacy family and is never treated as GPT-6 timing or quality evidence.
@@ -68,8 +101,8 @@ LEGACY_GPT56_ROUTING_LANES = {
     "complex_failed_escalation": {"model": "gpt-5.6-sol", "effort": "xhigh"},
 }
 
-# Only Luna and GPT-6.1 Sol are routable. Historical model identifiers remain
-# recognizable in coordinator metadata and ledger records, never as fallbacks.
+# Historical model identifiers remain recognizable in coordinator metadata and
+# ledger records; only entries in MODEL_CATALOG are routable.
 THREAD_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 SEGMENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 AGENT_TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,47}$")
@@ -113,6 +146,11 @@ SEGMENTED_PROTOCOL = "segmented-v1"
 PARALLEL_PROTOCOL = "dependency-parallel-v1"
 DEFAULT_EVIDENCE_PATH = Path(__file__).resolve().parents[1] / "references" / "benchmark-evidence.json"
 MODEL_ALIASES = {
+    "astra": "gpt-6-astra",
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt6-astra": "gpt-6-astra",
+    "gpt6 astra": "gpt-6-astra",
+    "gpt-6 astra": "gpt-6-astra",
     "gpt-5.6": "gpt-5.6-sol",
     "gpt-5.6 sol": "gpt-5.6-sol",
     "gpt5.6": "gpt-5.6-sol",
@@ -320,6 +358,8 @@ def _latency_priority(value=None):
 def normalize_model(value):
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise ValueError("model must be a string")
     normalized = MODEL_ALIASES.get(value.strip().lower())
     if normalized is None:
         raise ValueError(f"unsupported model: {value}")
@@ -338,9 +378,181 @@ def require_routable_model(model):
     return model
 
 
+def routing_config_paths(repository=None, environ=None):
+    environ = os.environ if environ is None else environ
+    codex_home = Path(environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    root = Path(repository or Path.cwd()).expanduser().resolve()
+    return {
+        "global": codex_home / "router.toml",
+        "project": root / ".codex" / "router.toml",
+    }
+
+
+def _read_routing_config(path, scope):
+    if not path.is_file():
+        return {"profile": None, "overrides": {}}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"invalid {scope} router config {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"invalid {scope} router config {path}: expected a TOML table")
+    if set(data) - {"schema_version", "profile", "profiles"}:
+        extra = sorted(set(data) - {"schema_version", "profile", "profiles"})
+        raise ValueError(f"invalid {scope} router config {path}: unknown top-level keys {extra}")
+    version = data.get("schema_version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != ROUTING_CONFIG_SCHEMA_VERSION:
+        raise ValueError(
+            f"invalid {scope} router config {path}: schema_version must be {ROUTING_CONFIG_SCHEMA_VERSION}"
+        )
+    profile = data.get("profile")
+    if profile is not None and (
+        not isinstance(profile, str) or profile not in ROUTING_PROFILES
+    ):
+        raise ValueError(f"invalid {scope} router config {path}: unsupported profile {profile!r}")
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ValueError(f"invalid {scope} router config {path}: profiles must be a table")
+    overrides = {}
+    for profile_name, profile_config in profiles.items():
+        if profile_name not in ROUTING_PROFILES or not isinstance(profile_config, dict):
+            raise ValueError(
+                f"invalid {scope} router config {path}: unsupported profile {profile_name!r}"
+            )
+        if set(profile_config) - {"routes"}:
+            raise ValueError(
+                f"invalid {scope} router config {path}: profile {profile_name!r} only supports routes"
+            )
+        routes = profile_config.get("routes", {})
+        if not isinstance(routes, dict):
+            raise ValueError(
+                f"invalid {scope} router config {path}: profile {profile_name!r} routes must be a table"
+            )
+        for lane, route in routes.items():
+            if lane not in TASK_LANES:
+                raise ValueError(f"invalid {scope} router config {path}: unknown lane {lane!r}")
+            if not isinstance(route, dict) or set(route) != {"model", "effort"}:
+                raise ValueError(
+                    f"invalid {scope} router config {path}: {profile_name}.{lane} requires model and effort"
+                )
+            try:
+                model = require_routable_model(normalize_model(route["model"]))
+                effort = normalize_effort(route["effort"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid {scope} router config {path}: {profile_name}.{lane}: {exc}"
+                ) from exc
+            if effort not in ROUTED_EFFORTS:
+                raise ValueError(
+                    f"invalid {scope} router config {path}: {profile_name}.{lane} effort must be one of {', '.join(ROUTED_EFFORTS)}"
+                )
+            overrides.setdefault(profile_name, {})[lane] = {
+                "model": model, "effort": effort,
+            }
+    return {"profile": profile, "overrides": overrides}
+
+
+def resolve_routing_config(repository=None, profile_override=None, environ=None):
+    """Resolve built-in routes plus global and repository-local TOML overrides."""
+    paths = routing_config_paths(repository, environ)
+    loaded = {
+        scope: _read_routing_config(path, scope)
+        for scope, path in paths.items()
+    }
+    profile = profile_override or loaded["project"]["profile"] or loaded["global"]["profile"] or DEFAULT_ROUTING_PROFILE
+    if profile not in ROUTING_PROFILES:
+        raise ValueError(f"unsupported routing profile: {profile!r}")
+    routes = {lane: dict(route) for lane, route in ROUTING_PROFILES[profile].items()}
+    sources = {lane: "built-in" for lane in routes}
+    for scope in ("global", "project"):
+        for lane, route in loaded[scope]["overrides"].get(profile, {}).items():
+            routes[lane] = dict(route)
+            sources[lane] = scope
+    return {
+        "profile": profile,
+        "routes": routes,
+        "route_sources": sources,
+        "config_paths": {scope: str(path) for scope, path in paths.items()},
+        "selected_from": (
+            "command-line" if profile_override else
+            "project" if loaded["project"]["profile"] else
+            "global" if loaded["global"]["profile"] else "default"
+        ),
+    }
+
+
+def _upsert_toml_root_value(text, key, value_source):
+    """Replace one validated root TOML assignment while retaining comments."""
+    lines = text.splitlines(keepends=True)
+    assignment = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    for start, line in enumerate(lines):
+        if not assignment.match(line):
+            continue
+        for end in range(start + 1, len(lines) + 1):
+            statement = "".join(lines[start:end])
+            try:
+                parsed = tomllib.loads(statement)
+            except tomllib.TOMLDecodeError:
+                continue
+            if key not in parsed:
+                continue
+            last_line = lines[end - 1]
+            line_ending = "\r\n" if last_line.endswith("\r\n") else "\n"
+            comment = re.search(r"[ \t]+#.*$", last_line.rstrip("\r\n"))
+            suffix = f" {comment.group(0).lstrip()}" if comment else ""
+            lines[start:end] = [f"{key} = {value_source}{suffix}{line_ending}"]
+            return "".join(lines)
+        raise ValueError(f"could not locate the end of the {key} assignment")
+    return f"{key} = {value_source}\n" + text
+
+
+def set_routing_profile(profile, scope="project", repository=None, environ=None):
+    if profile not in ROUTING_PROFILES:
+        raise ValueError(f"unsupported routing profile: {profile!r}")
+    if scope not in ("global", "project"):
+        raise ValueError("profile scope must be global or project")
+    paths = routing_config_paths(repository, environ)
+    path = paths[scope]
+    if scope == "global":
+        other_path = paths["project"]
+    else:
+        other_path = paths["global"]
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    _read_routing_config(path, scope)
+    # Parse the other layer too; profile selection must not conceal invalid policy.
+    _read_routing_config(other_path, "project" if scope == "global" else "global")
+    first_table = re.search(r"(?m)^\s*\[", existing)
+    split = first_table.start() if first_table else len(existing)
+    preamble, rest = existing[:split], existing[split:]
+    preamble = _upsert_toml_root_value(preamble, "profile", json.dumps(profile))
+    preamble = _upsert_toml_root_value(
+        preamble, "schema_version", str(ROUTING_CONFIG_SCHEMA_VERSION)
+    )
+    updated = preamble + rest
+    if not updated.endswith("\n"):
+        updated += "\n"
+    try:
+        parsed = tomllib.loads(updated)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"refusing to write invalid router config {path}: {exc}") from exc
+    if parsed.get("profile") != profile or parsed.get("schema_version") != ROUTING_CONFIG_SCHEMA_VERSION:
+        raise ValueError(f"refusing to write invalid router config {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        temporary.write_text(updated, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {"scope": scope, "profile": profile, "config_path": str(path), "changed": updated != existing}
+
+
 def normalize_effort(value):
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise ValueError("effort must be a string")
     normalized = EFFORT_ALIASES.get(value.strip().lower())
     if normalized is None:
         raise ValueError(f"unsupported effort: {value}")
@@ -380,6 +592,9 @@ def _target_lane(model, effort):
     for lane, route in CANONICAL_ROUTING_LANES.items():
         if (route["model"], route["effort"]) == (model, effort):
             return lane
+    for lane, route in ROUTING_PROFILES["quality"].items():
+        if (route["model"], route["effort"]) == (model, effort):
+            return lane
     return None
 
 
@@ -388,7 +603,7 @@ def _generic_fallback_chain(target_model, target_effort):
     role_order = {
         "efficient": ("gpt-6-luna", "gpt-6.1-sol"),
         "strong": ("gpt-6.1-sol",),
-        "frontier": ("gpt-6.1-sol",),
+        "frontier": ("gpt-6-astra", "gpt-6.1-sol"),
     }[role]
     return tuple((model, target_effort) for model in role_order)
 
@@ -566,6 +781,7 @@ def recommended_route(
     ambiguity=None, coupling=None, verification=None, consequence=None,
     prior_failure=False, evidence=None, latency_priority=None,
     prior_failure_kind=None,
+    routing_table=None,
 ):
     if mode == "apply" and (report_model is not None or report_effort is not None):
         if report_model is None or report_effort is None:
@@ -585,7 +801,7 @@ def recommended_route(
         # select_route still applies an explicit user override afterwards.
         return "gpt-6.1-sol", "high", "fixed-analysis-default"
 
-    lanes = CANONICAL_ROUTING_LANES
+    lanes = routing_table or CANONICAL_ROUTING_LANES
     if (
         task_kind == "complex" and signals["prior_failure"]
         and failure_kind in ("reasoning", "verification")
@@ -670,6 +886,8 @@ def select_route(
     latency_priority=None,
     prior_failure_kind=None,
     available_models=None,
+    routing_table=None,
+    routing_profile=None,
 ):
     report_model = normalize_model(report_model)
     if report_model is not None:
@@ -680,6 +898,7 @@ def select_route(
         mode, task_kind, risk, size, report_model, report_effort,
         ambiguity, coupling, verification, consequence, prior_failure, evidence,
         latency_priority, prior_failure_kind,
+        routing_table,
     )
 
     explicit_override = model_override is not None or effort_override is not None
@@ -723,6 +942,8 @@ def select_route(
         "route_id": str(uuid.uuid4()),
         "mode": mode,
         "recommended": {"model": target_model, "effort": target_effort, "source": source},
+        "routing_profile": routing_profile or DEFAULT_ROUTING_PROFILE,
+        "routing_lane": source.rsplit(":", 1)[-1] if source.startswith("deterministic-policy:") else None,
         "preferred_route": {"model": target_model, "effort": target_effort},
         "execution": {
             "model": execution_model,
@@ -1466,7 +1687,8 @@ def plan_parallel_segments(
     report_model=None, report_effort=None, max_segments=None, max_switches=None,
     max_parallelism=None, runtime_max_threads=None, runtime_total_slots=None,
     runtime_running_workers=0, coordinator_slots=DEFAULT_COORDINATOR_SLOTS,
-    evidence_path=None, scope_root=None,
+    evidence_path=None, scope_root=None, routing_table=None,
+    routing_profile=None,
 ):
     """Create a dependency-aware, wait-any Apply plan without executing it."""
     if not isinstance(raw_segments, list) or not raw_segments:
@@ -1548,6 +1770,7 @@ def plan_parallel_segments(
             [sanitized], current=current, model_override=model_override,
             effort_override=effort_override, report_model=report_model,
             report_effort=report_effort, evidence_path=evidence_path,
+            routing_table=routing_table, routing_profile=routing_profile,
         )["segments"][0]
         single.pop("attempt_id", None)
         single["depends_on"] = list(dict.fromkeys(dependencies))
@@ -1675,6 +1898,7 @@ def plan_parallel_segments(
     }
     result = {
         "route_id": route_id, "mode": "apply", "protocol": PARALLEL_PROTOCOL,
+        "routing_profile": routing_profile or DEFAULT_ROUTING_PROFILE,
         "current": current, "original": original,
         "routing_evidence": evidence_audit(evidence), "segments": segments,
         "segment_count": len(segments), "switch_count": 0,
@@ -2111,6 +2335,8 @@ def plan_apply_segments(
     max_segments=None,
     max_switches=None,
     evidence_path=None,
+    routing_table=None,
+    routing_profile=None,
 ):
     """Validate and route a bounded, linear Apply segment plan."""
     if not isinstance(raw_segments, list) or not raw_segments:
@@ -2202,6 +2428,7 @@ def plan_apply_segments(
             prior_failure=signals["prior_failure"], evidence=evidence,
             latency_priority=latency_priority,
             prior_failure_kind=prior_failure_kind,
+            routing_table=routing_table,
         )
         segment_model = normalize_model(raw.get("model"))
         if segment_model is not None:
@@ -2271,6 +2498,8 @@ def plan_apply_segments(
             "model": target_model,
             "effort": target_effort,
             "reason": source,
+            "routing_profile": routing_profile or DEFAULT_ROUTING_PROFILE,
+            "routing_lane": source.rsplit(":", 1)[-1] if source.startswith("deterministic-policy:") else None,
         })
         previous_id = segment_id
 
@@ -2312,6 +2541,7 @@ def plan_apply_segments(
     result = {
         "route_id": route_id,
         "mode": "apply",
+        "routing_profile": routing_profile or DEFAULT_ROUTING_PROFILE,
         "protocol": protocol,
         "current": current,
         "original": original,
@@ -2367,6 +2597,8 @@ def parser():
     root.add_argument("--target-model")
     root.add_argument("--target-effort")
     root.add_argument("--available-model", action="append")
+    root.add_argument("--profile", choices=tuple(ROUTING_PROFILES))
+    root.add_argument("--repository", type=Path, default=Path.cwd())
     root.add_argument("--sessions-root", type=Path)
     root.add_argument("--no-runtime-detection", action="store_true")
     root.add_argument("--current-model")
@@ -2499,6 +2731,7 @@ def main():
         return
     if args.mode is None:
         raise SystemExit("--mode is required unless --inspect-current is used")
+    routing_config = resolve_routing_config(args.repository, args.profile)
     if args.segments_json is None and (
         args.max_segments is not None or args.max_switches is not None
         or args.parallel or args.max_parallelism is not None or args.runtime_max_threads is not None
@@ -2541,6 +2774,8 @@ def main():
                 max_segments=args.max_segments,
                 max_switches=args.max_switches,
                 evidence_path=args.evidence_path,
+                routing_table=routing_config["routes"],
+                routing_profile=routing_config["profile"],
             )
             if planner is plan_parallel_segments:
                 planner_options["max_parallelism"] = args.max_parallelism
@@ -2577,6 +2812,8 @@ def main():
             args.latency_priority,
             args.prior_failure_kind,
             args.available_model,
+            routing_config["routes"],
+            routing_config["profile"],
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

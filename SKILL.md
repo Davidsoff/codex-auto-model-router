@@ -1,6 +1,6 @@
 ---
 name: codex-auto-model-router
-description: Recommend and execute efficient GPT-6.1 Sol or GPT-6 Luna routes for Codex project work. Retired model IDs are rejected for routing and remain readable only as historical execution metadata. Prefer bounded direct tool concurrency, but automatically create or reuse a model-specific leaf agent when route-fit benefit clearly exceeds startup and aggregation overhead; no extra user permission is required. Use for code changes, tests, reviews, routed implementation, model recommendations, usage queries, retuning, and requests to disable, exit, restore, or check this Skill for the current project. Use the legacy strict state machine only when the user explicitly requests strict ledger auditing. Never auto-select Ultra or create a new top-level Codex task.
+description: Recommend and execute GPT-6 Astra, GPT-6.1 Sol, or GPT-6 Luna routes for Codex project work using configurable economy, balanced, and quality profiles. Retired model IDs remain readable only as historical execution metadata. Prefer bounded direct tool concurrency, but automatically create or reuse a model-specific leaf agent when route-fit benefit clearly exceeds startup and aggregation overhead; no extra user permission is required. Use for code changes, tests, reviews, routed implementation, model recommendations, usage queries, retuning, and requests to disable, exit, restore, or check this Skill for the current project. Use the legacy strict state machine only when the user explicitly requests strict ledger auditing. Never auto-select Ultra or create a new top-level Codex task.
 ---
 
 # Codex Auto Model Router
@@ -23,8 +23,8 @@ After a successful exit, stop all Router classification, notices, delegation, re
 
 ## Default workflow
 
-1. Let `decide` check project exit state first. If it returns `action=disabled`, stop using this Skill for the project. Otherwise classify the smallest useful task with `task_kind=mechanical|ordinary|complex`, `risk`, `size`, and only material ambiguity, coupling, verification, consequence, latency, or prior-failure signals. Include a conservative `estimated_seconds` when the work is bounded enough to estimate.
-2. Run `python3 scripts/router_lite.py decide ... --estimated-seconds <n>` once. Use only the documented enum values; compatibility aliases are fail-open protection, not preferred input. Pass `--no-subagents` only when the user explicitly disables child agents. Treat `recommended_route` as advice until a returned `delegate` or `reuse` action is actually dispatched and observed.
+1. Let `decide` check project exit state first. If it returns `action=disabled`, stop using this Skill for the project. Otherwise load the selected route profile once, then classify the smallest useful task with `task_kind=mechanical|ordinary|complex`, `risk`, `size`, and only material ambiguity, coupling, verification, consequence, latency, or prior-failure signals. Include a conservative `estimated_seconds` when the work is bounded enough to estimate.
+2. Run `python3 scripts/router_lite.py decide ... --estimated-seconds <n>` once. Select a one-command profile with `--profile economy|balanced|quality`; default selection is project, global, then `balanced`. Use only the documented enum values; compatibility aliases are fail-open protection, not preferred input. Pass `--no-subagents` only when the user explicitly disables child agents. Treat `recommended_route` as advice until a returned `delegate` or `reuse` action is actually dispatched and observed.
 3. Before dispatch, show a planned-route notice in the language of the user's current request. Keep English as the only canonical template and translate it naturally when the request uses another language:
    - Local: `Codex auto route | Task: <name> | Recommendation: <model>/<effort> | Execution: current coordinator <model>/<effort> | No automatic switch: <execution_reason>`
    - Planned delegation: `Codex auto route | Task: <name> | Recommendation: <model>/<effort> | Planned executor: leaf agent <model>/<effort> | Switch reason: <execution_reason>`
@@ -39,6 +39,12 @@ After a successful exit, stop all Router classification, notices, delegation, re
 6. Do not record a recommended route as actual model use. Record only verified execution metadata after an observed leaf run or when the current task's model is directly observed. Treat every ledger error as a non-blocking warning and normally omit it from the user response.
 
 The coordinator never changes its own model. A leaf executor is a separate reasoning stream, not a model switch inside the current conversation, so there is no Restore step.
+
+## Routing profiles
+
+The shared policy defines `economy`, `balanced`, and `quality`. `balanced` preserves the original table. `economy` uses Luna for all lanes. `quality` keeps mechanical work on Luna, routes other ordinary and complex work to Sol, and uses Astra for high consequence and classified complex reasoning or verification failure. These profiles are preferences, not latency guarantees.
+
+Read `${CODEX_HOME:-~/.codex}/router.toml` and `<repository>/.codex/router.toml`; project selection overrides global selection, and project route overrides override global route overrides. Each override is under `[profiles.<name>.routes.<lane>]` and supplies both `model` and `effort`. A command may temporarily select a profile with `--profile`; use `router_lite.py profile-show --repository .` to inspect the resolved table and `profile-set <name> --scope global|project` to save the selection. Project-disable is checked before these route settings are loaded. Invalid settings make Router Lite fail open to local execution with the configuration path and error.
 
 The Router still evaluates every applicable request. It may report `tiny-local-fast-path`, `tool-bound-local-fast-path`, `startup-aware-local-fast-path`, `route-benefit-not-proven`, or `subagents-disabled-by-user`. A recommendation never proves actual model use, and a supported GPT-6 model override remains the preferred recommendation.
 
@@ -56,7 +62,7 @@ Use the offline policy in `route_policy.py`; task evidence and supported GPT-6 o
 - GPT-6.1 Sol/xhigh: a classified reasoning or verification failure on complex work.
 - All listed efforts are available through explicit override; automatic use follows the lanes above. Sol/max is explicit-only.
 
-Never select Ultra automatically. Only Luna routes may fall back to GPT-6.1 Sol at the same effort. Sol routes never downgrade to Luna; if Sol is unavailable, keep the recommendation and follow the normal local fail-open behavior. Reject retired Astra, GPT-6 Sol, GPT-5.6, and GPT-5.5 route requests. Keep retired names readable for current-coordinator metadata and historical ledger entries. GPT-5.5 is never an availability fallback. Unknown availability keeps the preferred route advisory.
+Never select Ultra automatically. Luna routes may fall back to Sol at the same effort, and Astra routes may fall back to Sol at the same effort. Sol routes never downgrade; if a preferred route is unavailable, retain the recommendation and follow the normal local fail-open behavior. Reject retired GPT-6 Sol, GPT-5.6, and GPT-5.5 route requests. Keep retired names readable for current-coordinator metadata and historical ledger entries. GPT-5.5 is never an availability fallback. Unknown availability keeps the preferred route advisory.
 
 The user-provided Artificial Analysis graph (recorded 2026-10-02) plots GPT-6 Luna from about index 21 at $0.005/task (low) to index 37 at $0.068 (max), and GPT-6.1 Sol from about index 42 at $0.131 (low) to index 52 at $0.724 (max). Values are estimates from the supplied chart coordinates. The graph supports a value tier for Luna and a higher-capability tier for Sol; it does not establish latency or Codex subscription cost. See [benchmark evidence](references/benchmark-evidence.md).
 

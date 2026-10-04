@@ -2,7 +2,7 @@
 
 [![Validate](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml/badge.svg)](https://github.com/orange-the-weak/codex-auto-model-router/actions/workflows/validate.yml)
 
-**面向 OpenAI Codex 的轻量 GPT-6.1 Sol 和 GPT-6 Luna 推理路由器。** 将任务语义与具体模型标识分开，只选择这两个模型。旧模型标识不再用于路由，但仍可读取历史记录。
+**面向 OpenAI Codex 的轻量 GPT-6 Astra、GPT-6.1 Sol 和 GPT-6 Luna 推理路由器。** 将任务语义与具体模型标识分开，并提供三个可切换的路由配置。GPT-6 Sol、GPT-5.6 和 GPT-5.5 不再用于路由，但仍可读取历史记录。
 
 [English](README.md) · [路由反馈](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=routing-feedback.yml) · [问题反馈](https://github.com/orange-the-weak/codex-auto-model-router/issues/new?template=bug-report.yml)
 
@@ -19,8 +19,8 @@ GPT-5.6 为 Codex 带来了有用的模型和推理组合。GPT-6 加入后，�
    ├─ latency_priority 兼容通道 → GPT-6 Luna/max（成本与能力取舍）
    ├─ 有界复杂任务 → GPT-6.1 Sol/low
    ├─ 高歧义或高耦合 → GPT-6.1 Sol/medium
-   ├─ 高后果任务 → GPT-6.1 Sol/high
-   └─ 已分类的复杂推理失败 → GPT-6.1 Sol/xhigh
+   ├─ 高后果任务 → 当前配置指定的模型与推理强度
+   └─ 已分类的复杂推理失败 → 当前配置指定的模型与推理强度
       ↓
    建议一致或切换不划算 → 主线程直接完成
    建议不同且路由收益超过开销 → 使用对应模型的叶子智能体
@@ -70,6 +70,32 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/codex-auto-model-router/scripts/rout
 
 `--no-subagents` 含义不同：它只针对一次 Router 命令禁用子智能体，不会退出整个 Skill。项目配置遵循 Codex 官方的 [`config.toml` 机制](https://developers.openai.com/codex/config-reference/)。
 
+## 路由配置与覆盖
+
+内置的 `balanced` 保留原有路由表。`economy` 在所有通道优先选择 Luna；`quality` 将机械任务保留在 Luna，其他工作使用 Sol，并在高后果任务和分类后的复杂失败中使用 Astra/high 或 Astra/xhigh。这些配置表达模型与推理强度偏好，不保证延迟表现。
+
+可保存全局或当前项目的默认配置，也可为单条命令临时选择：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/codex-auto-model-router/scripts/router_lite.py" profile-set economy --scope global
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/codex-auto-model-router/scripts/router_lite.py" profile-set quality --scope project --repository .
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/codex-auto-model-router/scripts/router_lite.py" profile-show --repository .
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/codex-auto-model-router/scripts/router_lite.py" decide --profile balanced
+```
+
+设置保存在 `${CODEX_HOME:-~/.codex}/router.toml` 和 `<repository>/.codex/router.toml`。项目配置优先于全局配置；项目通道路由覆盖优先于全局覆盖。每项覆盖都需要同时指定模型和推理强度：
+
+```toml
+schema_version = 1
+profile = "quality"
+
+[profiles.quality.routes.complex_uncertain]
+model = "gpt-6.1-sol"
+effort = "high"
+```
+
+可以使用 `router_lite.py decide --profile quality ...` 或 `plan --profile economy ...` 临时切换。`profile-set` 只更改已保存的配置名称，并保留通道路由覆盖。
+
 ## 工作方式
 
 每个适用请求只走三条路径之一：
@@ -102,9 +128,9 @@ CLI 默认启用收益门槛委派；`--no-subagents` 是明确退出开关。�
 - 独立安全的工具和进程可以并发执行，不复制模型上下文，也不新增子智能体 UI 条目。
 - `--no-subagents` 可明确禁用委派、复用和代理并发；其他情况下无需额外询问许可。
 - 推荐路由与本轮实际使用的模型被明确分开，不再声称 Skill 已切换主对话模型。
-- Ultra 仍需用户显式开启。路由只在 GPT-6.1 Sol 与 GPT-6 Luna 之间选择；GPT-5.6 不可选择，GPT-5.5 不再作为可用性回退。
+- Ultra 仍需用户显式开启。路由配置可在 GPT-6 Astra、GPT-6.1 Sol 与 GPT-6 Luna 间选择；GPT-6 Sol 和 GPT-5.6 不可选择，GPT-5.5 不再作为可用性回退。
 
-## 模型梯度
+## balanced 配置的模型梯度
 
 | 任务 | 默认路由 |
 |---|---|
@@ -115,10 +141,10 @@ CLI 默认启用收益门槛委派；`--no-subagents` 是明确退出开关。�
 | `latency_priority` 兼容通道（成本与能力取舍） | GPT-6 Luna / max |
 | 有界复杂任务 | GPT-6.1 Sol / low |
 | 高歧义或高耦合 | GPT-6.1 Sol / medium |
-| 高后果任务 | GPT-6.1 Sol / high |
-| 复杂推理或验证已有失败 | GPT-6.1 Sol / xhigh |
+| 高后果任务 | balanced 使用 GPT-6.1 Sol / high；quality 使用 GPT-6 Astra / high |
+| 复杂推理或验证已有失败 | balanced 使用 GPT-6.1 Sol / xhigh；quality 使用 GPT-6 Astra / xhigh |
 
-`latency_priority` 通道名为兼容而保留，其 Luna/max 路由体现成本与能力取舍，不代表最快路由。`sol` 表示 GPT-6.1 Sol；旧版 GPT-6 Sol 和 Astra 标识会被拒绝。GPT-5.6 和 GPT-5.5 也不可用于路由，但历史执行记录仍可读取。
+`latency_priority` 通道名为兼容而保留，其 `balanced` 配置的 Luna/max 路由体现成本与能力取舍，不代表最快路由。`sol` 表示 GPT-6.1 Sol，`astra` 表示 GPT-6 Astra。GPT-6 Sol、GPT-5.6 和 GPT-5.5 不可用于路由，但历史执行记录仍可读取。
 
 Ultra 永不自动启用。用户显式使用 Ultra 时，由其原生编排接管，并关闭 Router 并发。Luna 路由不可用时可按相同 effort 回退到 Sol；Sol 路由不会降级到 Luna。Sol 不可用时，保留首选路由建议并按常规本地 fail-open 路径处理。GPT-5.5 不再作为可用性回退。
 

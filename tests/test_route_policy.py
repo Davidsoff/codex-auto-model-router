@@ -1,9 +1,11 @@
 import importlib.util
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -185,9 +187,209 @@ class RoutePolicyTests(unittest.TestCase):
                 self.assertEqual(result["reason"], "no-supported-model-available")
 
     def test_retired_model_overrides_are_rejected(self):
-        for model in ("gpt-6-astra", "gpt-6-sol", "Astra"):
+        for model in ("gpt-6-sol",):
             with self.subTest(model=model), self.assertRaises(ValueError):
                 POLICY.select_route("apply", model_override=model)
+
+    def test_profiles_preserve_balanced_and_define_all_lanes(self):
+        self.assertEqual(POLICY.ROUTING_PROFILES["balanced"], POLICY.CANONICAL_ROUTING_LANES)
+        self.assertEqual(set(POLICY.ROUTING_PROFILES), {"economy", "balanced", "quality"})
+        for profile, routes in POLICY.ROUTING_PROFILES.items():
+            with self.subTest(profile=profile):
+                self.assertEqual(set(routes), set(POLICY.TASK_LANES))
+                for route in routes.values():
+                    self.assertIn(route["model"], POLICY.MODELS)
+                    self.assertIn(route["effort"], POLICY.ROUTED_EFFORTS)
+        self.assertEqual(
+            POLICY.ROUTING_PROFILES["quality"]["high_consequence"],
+            {"model": "gpt-6-astra", "effort": "high"},
+        )
+        self.assertEqual(
+            POLICY.ROUTING_PROFILES["quality"]["complex_failed_escalation"],
+            {"model": "gpt-6-astra", "effort": "xhigh"},
+        )
+
+    def test_routing_config_precedence_and_command_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex"
+            project = root / "project"
+            global_file = codex_home / "router.toml"
+            project_file = project / ".codex" / "router.toml"
+            global_file.parent.mkdir(parents=True)
+            project_file.parent.mkdir(parents=True)
+            global_file.write_text(
+                'schema_version = 1\nprofile = "economy"\n'
+                '[profiles.economy.routes.complex_bounded]\n'
+                'model = "gpt-6.1-sol"\neffort = "high"\n'
+            )
+            project_file.write_text(
+                'schema_version = 1\nprofile = "quality"\n'
+                '[profiles.quality.routes.complex_bounded]\n'
+                'model = "astra"\neffort = "medium"\n'
+            )
+            env = {"CODEX_HOME": str(codex_home)}
+            selected = POLICY.resolve_routing_config(project, environ=env)
+            self.assertEqual(selected["profile"], "quality")
+            self.assertEqual(selected["selected_from"], "project")
+            self.assertEqual(selected["routes"]["complex_bounded"], {
+                "model": "gpt-6-astra", "effort": "medium",
+            })
+            self.assertEqual(selected["route_sources"]["complex_bounded"], "project")
+            command = POLICY.resolve_routing_config(project, "economy", env)
+            self.assertEqual(command["profile"], "economy")
+            self.assertEqual(command["selected_from"], "command-line")
+            self.assertEqual(command["routes"]["complex_bounded"], {
+                "model": "gpt-6.1-sol", "effort": "high",
+            })
+
+    def test_config_route_applies_and_explicit_override_wins(self):
+        routing = POLICY.ROUTING_PROFILES["quality"]
+        route = POLICY.select_route(
+            "apply", task_kind="ordinary", current=current(),
+            routing_table=routing, routing_profile="quality",
+        )
+        self.assertEqual(route["routing_profile"], "quality")
+        self.assertEqual(route["routing_lane"], "ordinary_default")
+        self.assertEqual(
+            (route["recommended"]["model"], route["recommended"]["effort"]),
+            ("gpt-6.1-sol", "medium"),
+        )
+        override = POLICY.select_route(
+            "apply", task_kind="ordinary", current=current(),
+            model_override="gpt-6-luna", effort_override="low",
+            routing_table=routing, routing_profile="quality",
+        )
+        self.assertEqual(
+            (override["recommended"]["model"], override["recommended"]["effort"]),
+            ("gpt-6-luna", "low"),
+        )
+        self.assertIsNone(override["routing_lane"])
+
+    def test_policy_cli_accepts_profile_for_high_consequence_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, CODEX_HOME=str(root / "codex"))
+            completed = subprocess.run(
+                [
+                    sys.executable, str(ROOT / "scripts" / "route_policy.py"),
+                    "--mode", "apply", "--profile", "quality",
+                    "--repository", str(root), "--no-runtime-detection",
+                    "--risk", "high", "--consequence", "high",
+                ],
+                cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result["routing_profile"], "quality")
+            self.assertEqual(result["routing_lane"], "high_consequence")
+            self.assertEqual(result["recommended"], {
+                "model": "gpt-6-astra", "effort": "high",
+                "source": "deterministic-policy:high_consequence",
+            })
+
+    def test_astra_falls_back_to_sol_at_same_effort(self):
+        for effort in ("high", "xhigh"):
+            with self.subTest(effort=effort):
+                route = POLICY.resolve_family_fallback(
+                    "Astra", effort, ["gpt-6.1-sol"]
+                )
+                self.assertEqual(
+                    (route["execution"]["model"], route["execution"]["effort"]),
+                    ("gpt-6.1-sol", effort),
+                )
+
+    def test_linear_and_parallel_plans_use_resolved_profile_table(self):
+        segment = self.segment(
+            "critical-change", task_kind="ordinary", risk="high", consequence="high"
+        )
+        linear = POLICY.plan_apply_segments(
+            [segment], current=current(), routing_table=POLICY.ROUTING_PROFILES["quality"],
+            routing_profile="quality",
+        )
+        self.assertEqual(linear["routing_profile"], "quality")
+        self.assertEqual(linear["segments"][0]["routing_lane"], "high_consequence")
+        self.assertEqual(
+            (linear["segments"][0]["model"], linear["segments"][0]["effort"]),
+            ("gpt-6-astra", "high"),
+        )
+        parallel = POLICY.plan_parallel_segments(
+            [dict(segment, segment_id="critical-change", depends_on=[])],
+            current=current(), routing_table=POLICY.ROUTING_PROFILES["quality"],
+            routing_profile="quality",
+        )
+        self.assertEqual(parallel["routing_profile"], "quality")
+        self.assertEqual(parallel["segments"][0]["model"], "gpt-6-astra")
+
+    def test_invalid_routing_configs_are_rejected(self):
+        cases = (
+            ('schema_version = 2\n', "schema_version"),
+            ('schema_version = 1\nprofile = "missing"\n', "profile"),
+            ('schema_version = 1\n[profiles.quality.routes.unknown]\nmodel="sol"\neffort="high"\n', "lane"),
+            ('schema_version = 1\n[profiles.quality.routes.ordinary_default]\nmodel="gpt-6-astra"\neffort="ultra"\n', "effort"),
+            ('schema_version = 1\n[profiles.quality.routes.ordinary_default]\nmodel="gpt-6-sol"\neffort="high"\n', "not routable"),
+        )
+        for content, expected in cases:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / ".codex").mkdir()
+                (root / ".codex" / "router.toml").write_text(content)
+                with self.assertRaisesRegex(ValueError, expected):
+                    POLICY.resolve_routing_config(root, environ={"CODEX_HOME": str(root / "empty")})
+
+    def test_profile_set_preserves_comments_and_overrides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex"
+            project = root / "project"
+            path = project / ".codex" / "router.toml"
+            path.parent.mkdir(parents=True)
+            original = (
+                '# personal routing settings\nschema_version = 1\n'
+                'profile = "economy" # selected tier\n\n'
+                '[profiles.quality.routes.complex_uncertain]\n'
+                'model = "gpt-6.1-sol"\neffort = "high"\n'
+            )
+            path.write_text(original)
+            result = POLICY.set_routing_profile(
+                "quality", "project", project, {"CODEX_HOME": str(codex_home)}
+            )
+            updated = path.read_text()
+            self.assertTrue(result["changed"])
+            self.assertIn('# personal routing settings', updated)
+            self.assertIn('profile = "quality" # selected tier', updated)
+            self.assertIn('[profiles.quality.routes.complex_uncertain]', updated)
+            self.assertIn('effort = "high"', updated)
+            self.assertEqual(
+                POLICY.resolve_routing_config(project, environ={"CODEX_HOME": str(codex_home)})["profile"],
+                "quality",
+            )
+
+    def test_profile_set_rewrites_valid_noncanonical_toml_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex"
+            project = root / "project"
+            path = project / ".codex" / "router.toml"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "schema_version = 0x1 # TOML hex integer\n"
+                "profile = 'economy' # TOML literal string\n\n"
+                "[profiles.economy.routes.complex_bounded]\n"
+                "model = 'gpt-6-luna'\neffort = 'high'\n"
+            )
+            POLICY.set_routing_profile(
+                "quality", "project", project, {"CODEX_HOME": str(codex_home)}
+            )
+            result = tomllib.loads(path.read_text())
+            self.assertEqual(result["schema_version"], 1)
+            self.assertEqual(result["profile"], "quality")
+            self.assertIn("# TOML hex integer", path.read_text())
+            self.assertIn("# TOML literal string", path.read_text())
+            self.assertEqual(
+                POLICY.resolve_routing_config(project, environ={"CODEX_HOME": str(codex_home)})["profile"],
+                "quality",
+            )
 
     def test_sol_max_is_available_only_by_explicit_override(self):
         automatic = POLICY.select_route("apply", task_kind="complex", current=current())
@@ -580,7 +782,8 @@ class RoutePolicyTests(unittest.TestCase):
         self.assertEqual(POLICY.normalize_model("Luna"), "gpt-6-luna")
         self.assertEqual(POLICY.normalize_model("Sol"), "gpt-6.1-sol")
         self.assertEqual(POLICY.normalize_model("GPT-5.6 Luna"), "gpt-5.6-luna")
-        for retired in ("gpt-6-astra", "gpt-6-sol", "Astra"):
+        self.assertEqual(POLICY.normalize_model("Astra"), "gpt-6-astra")
+        for retired in ("gpt-6-sol",):
             with self.subTest(retired=retired), self.assertRaises(ValueError):
                 POLICY.normalize_model(retired)
 

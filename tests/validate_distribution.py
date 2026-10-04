@@ -412,6 +412,7 @@ if "GPT-5.5" not in (ROOT / "references" / "benchmark-evidence.md").read_text(en
     fail("benchmark evidence report is missing the GPT-5.5 comparison")
 
 models = [
+    ("gpt6_astra", "gpt6-astra", "gpt-6-astra"),
     ("gpt61_sol", "gpt61-sol", "gpt-6.1-sol"),
     ("gpt6_luna", "gpt6-luna", "gpt-6-luna"),
 ]
@@ -458,10 +459,10 @@ for tier, filename_tier, model in models:
             fail(f"executor preset mapping is missing: {executor_name}")
         executor_count += 1
 
-if router_count != 10 or executor_count != 10:
-    fail(f"expected 10 GPT-6.1 Sol and Luna router and executor presets, found {router_count} and {executor_count}")
-if any("astra" in path.name or "gpt6-sol" in path.name for path in (ROOT / "codex-agents").glob("codex-auto-model-*.toml")):
-    fail("retired Astra or GPT-6 Sol presets must not be distributed")
+if router_count != 15 or executor_count != 15:
+    fail(f"expected 15 GPT-6 Astra, GPT-6.1 Sol, and Luna router and executor presets, found {router_count} and {executor_count}")
+if any("gpt6-sol" in path.name for path in (ROOT / "codex-agents").glob("codex-auto-model-*.toml")):
+    fail("retired GPT-6 Sol presets must not be distributed")
 if list((ROOT / "codex-agents").glob("codex-auto-model-router*.toml")) and any(
     "gpt-5.6" in path.read_text(encoding="utf-8")
     for path in (ROOT / "codex-agents").glob("codex-auto-model-router*.toml")
@@ -512,4 +513,4 @@ for forbidden in ("s" + "k-" + "live", "BEGIN " + "PRIVATE KEY", "api" + "_key")
         ):
             fail(f"possible secret marker {forbidden!r} in {path}")
 
-print("distribution OK: skill metadata, UI metadata, 10 GPT-6 router presets, 10 GPT-6 executor presets, no obvious secrets")
+print("distribution OK: skill metadata, UI metadata, 15 GPT-6 router presets, 15 GPT-6 executor presets, no obvious secrets")

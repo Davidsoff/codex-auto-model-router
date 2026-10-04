@@ -271,6 +271,9 @@ def _decision(args, task=None, current=None):
             if args.no_runtime_detection
             else policy.detect_current_route(args.sessions_root)
         )
+    routing_config = getattr(args, "routing_config", None) or policy.resolve_routing_config(
+        getattr(args, "repository", None), getattr(args, "profile", None)
+    )
     selected = policy.select_route(
         "apply",
         task_kind=task.get("task_kind", args.task_kind),
@@ -289,6 +292,8 @@ def _decision(args, task=None, current=None):
         available_models=task.get(
             "available_models", getattr(args, "available_model", None)
         ),
+        routing_table=routing_config["routes"],
+        routing_profile=routing_config["profile"],
     )
     preferred_model = selected["recommended"]["model"]
     preferred_effort = selected["recommended"]["effort"]
@@ -436,6 +441,8 @@ def _decision(args, task=None, current=None):
             }
         ),
         "recommended_route": {"model": preferred_model, "effort": preferred_effort},
+        "routing_profile": selected["routing_profile"],
+        "routing_lane": selected["routing_lane"],
         "preferred_route": {"model": preferred_model, "effort": preferred_effort},
         "fallback": selected["fallback"],
         "reason": reason,
@@ -620,6 +627,9 @@ def decide(args):
             sort_keys=True,
         ))
         return
+    args.routing_config = policy.resolve_routing_config(
+        getattr(args, "repository", None), getattr(args, "profile", None)
+    )
     result = _decision(args)
     max_reuses = int(getattr(args, "max_executor_reuses", DEFAULT_MAX_REUSES_PER_EXECUTOR))
     if not 0 <= max_reuses <= 3:
@@ -914,6 +924,9 @@ def plan(args):
             sort_keys=True,
         ))
         return
+    args.routing_config = policy.resolve_routing_config(
+        getattr(args, "repository", None), getattr(args, "profile", None)
+    )
     try:
         tasks = json.loads(args.tasks_json)
     except json.JSONDecodeError as exc:
@@ -1170,6 +1183,7 @@ def record(args):
 
 
 def _add_route_arguments(parser):
+    parser.add_argument("--profile", choices=tuple(policy.ROUTING_PROFILES))
     parser.add_argument("--task-kind", choices=("mechanical", "ordinary", "complex"), default="ordinary")
     parser.add_argument(
         "--risk", type=_risk_value, choices=("low", "normal", "high"), default="normal"
@@ -1245,6 +1259,21 @@ def _add_project_arguments(parser):
     parser.add_argument("--skill-path", type=Path, default=_default_skill_path())
 
 
+def profile_show(args):
+    config = policy.resolve_routing_config(args.repository, getattr(args, "profile", None))
+    print(json.dumps({
+        "action": "profile-show",
+        **config,
+    }, ensure_ascii=False, sort_keys=True))
+
+
+def profile_set(args):
+    result = policy.set_routing_profile(
+        args.profile_name, args.scope, args.repository
+    )
+    print(json.dumps({"action": "profile-set", **result}, ensure_ascii=False, sort_keys=True))
+
+
 def parser():
     root = FailOpenArgumentParser()
     commands = root.add_subparsers(dest="command", required=True)
@@ -1305,6 +1334,15 @@ def parser():
     status = commands.add_parser("project-status")
     _add_project_arguments(status)
     status.set_defaults(func=project_status)
+    show = commands.add_parser("profile-show")
+    show.add_argument("--repository", type=Path, default=Path.cwd())
+    show.add_argument("--profile", choices=tuple(policy.ROUTING_PROFILES))
+    show.set_defaults(func=profile_show)
+    profile = commands.add_parser("profile-set")
+    profile.add_argument("profile_name", choices=tuple(policy.ROUTING_PROFILES))
+    profile.add_argument("--scope", choices=("global", "project"), default="project")
+    profile.add_argument("--repository", type=Path, default=Path.cwd())
+    profile.set_defaults(func=profile_set)
     return root
 
 
@@ -1313,12 +1351,23 @@ def main(argv=None):
         args = parser().parse_args(argv)
         args.func(args)
     except (OSError, ValueError, SystemExit) as exc:
+        if "args" in locals() and getattr(args, "command", None) in (
+            "profile-show", "profile-set"
+        ):
+            print(json.dumps({
+                "action": args.command,
+                "error": str(exc),
+            }, ensure_ascii=False, sort_keys=True))
+            return 0
         # Routing advice must never block the requested project work.
+        warning = f"router-lite-fallback:{type(exc).__name__}"
+        if "router config" in str(exc):
+            warning += f": {exc}"
         print(json.dumps({
             "protocol": LITE_PROTOCOL,
             "action": "local",
             "fail_open": True,
-            "warning": f"router-lite-fallback:{type(exc).__name__}",
+            "warning": warning,
         }, ensure_ascii=False, sort_keys=True))
     return 0
 

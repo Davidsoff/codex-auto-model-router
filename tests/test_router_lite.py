@@ -55,6 +55,7 @@ class RouterLiteTests(unittest.TestCase):
             "estimated_seconds": None,
             "min_delegate_seconds": LITE.DEFAULT_MIN_DELEGATE_SECONDS,
             "model": None, "effort": None, "sessions_root": None,
+            "profile": None,
             "no_runtime_detection": False,
             "no_subagents": False,
             # Compatibility flag for older wrappers; it is no longer permission.
@@ -102,6 +103,94 @@ class RouterLiteTests(unittest.TestCase):
         self.assertEqual(result["action"], "local")
         self.assertFalse(result["restore_required"])
         self.assertEqual(result["execution_reason"], "current-route-already-matches")
+
+    def test_quality_profile_routes_to_astra_for_high_consequence(self):
+        current = LITE.policy.unavailable_current()
+        with patch.object(LITE.policy, "resolve_routing_config") as resolve_config:
+            resolve_config.return_value = {
+                "profile": "quality",
+                "routes": LITE.policy.ROUTING_PROFILES["quality"],
+            }
+            result = self.output(LITE.decide, self.args(
+                profile="quality", consequence="high", risk="high",
+                estimated_seconds=180, no_runtime_detection=True,
+            ))
+        self.assertEqual(result["routing_profile"], "quality")
+        self.assertEqual(result["routing_lane"], "high_consequence")
+        self.assertEqual(result["recommended_route"], {
+            "model": "gpt-6-astra", "effort": "high",
+        })
+        self.assertEqual(result["agent_type"], "codex_auto_model_executor_gpt6_astra_high")
+
+    def test_plan_resolves_profile_once_for_all_tasks(self):
+        tasks = [
+            {"task_name": "critical_one", "risk": "high", "consequence": "high"},
+            {"task_name": "critical_two", "risk": "high", "consequence": "high"},
+        ]
+        with patch.object(LITE.policy, "resolve_routing_config") as resolve_config:
+            resolve_config.return_value = {
+                "profile": "quality",
+                "routes": LITE.policy.ROUTING_PROFILES["quality"],
+            }
+            result = self.output(LITE.plan, self.plan_args(
+                tasks, profile="quality", no_subagents=True, no_runtime_detection=True,
+            ))
+        resolve_config.assert_called_once()
+        self.assertEqual(result["action"], "local")
+        self.assertEqual(
+            {item["route"]["recommended_route"]["model"] for item in result["tasks"]},
+            {"gpt-6-astra"},
+        )
+
+    def test_disabled_project_does_not_load_router_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex = root / ".codex"
+            codex.mkdir()
+            (codex / "config.toml").write_text(
+                f"{LITE.PROJECT_EXIT_BEGIN}\n{LITE.PROJECT_EXIT_END}\n"
+            )
+            (codex / "router.toml").write_text("not valid TOML =")
+            args = self.args(repository=root, no_runtime_detection=True)
+            with patch.object(LITE.policy, "resolve_routing_config") as resolve_config:
+                result = self.output(LITE.decide, args)
+            resolve_config.assert_not_called()
+            self.assertEqual(result["action"], "disabled")
+
+    def test_profile_commands_preserve_existing_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / ".codex"
+            config_dir.mkdir()
+            path = config_dir / "router.toml"
+            path.write_text(
+                '# kept comment\nschema_version = 1\n\n'
+                '[profiles.quality.routes.complex_uncertain]\n'
+                'model = "gpt-6.1-sol"\neffort = "high"\n'
+            )
+            updated = self.output(LITE.profile_set, SimpleNamespace(
+                profile_name="quality", scope="project", repository=root,
+            ))
+            shown = self.output(LITE.profile_show, SimpleNamespace(
+                repository=root, profile=None,
+            ))
+            self.assertTrue(updated["changed"])
+            self.assertEqual(shown["profile"], "quality")
+            self.assertEqual(shown["route_sources"]["complex_uncertain"], "project")
+            self.assertIn("# kept comment", path.read_text())
+
+    def test_invalid_configuration_fails_open_with_actionable_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / ".codex"
+            config_dir.mkdir()
+            config_path = config_dir / "router.toml"
+            config_path.write_text("schema_version = 2\n")
+            result = self.output(LITE.main, [
+                "decide", "--repository", str(root), "--no-runtime-detection",
+            ])
+            self.assertEqual(result["action"], "local")
+            self.assertIn(str(config_path), result["warning"])
 
     def test_mismatched_route_automatically_uses_agent_without_switch_or_hash(self):
         current = {"status": "verified", "thread_id": "t", "model": "gpt-5.6-sol", "effort": "high"}

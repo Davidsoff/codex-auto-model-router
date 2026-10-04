@@ -1,12 +1,13 @@
 # Explicit custom-agent preset mapping
 
-Use a model-specific leaf only when the automatic benefit gate clears and the interface accepts an agent type. Local decisions return no Apply agent type. The routable models are GPT-6.1 Sol and GPT-6 Luna; retired IDs cannot be selected.
+Use a model-specific leaf only when the automatic benefit gate clears and the interface accepts an agent type. Local decisions return no Apply agent type. The routable models are GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna; retired GPT-6 Sol and GPT-5.x IDs cannot be selected.
 
 ## Assess and Retune (read-only router)
 
 | Model | low | medium | high | xhigh | max |
 |---|---|---|---|---|---|
 | GPT-6.1 Sol | `codex_auto_model_router_gpt61_sol_low` | `codex_auto_model_router_gpt61_sol` | `codex_auto_model_router_gpt61_sol_high` | `codex_auto_model_router_gpt61_sol_xhigh` | `codex_auto_model_router_gpt61_sol_max` |
+| GPT-6 Astra | `codex_auto_model_router_gpt6_astra_low` | `codex_auto_model_router_gpt6_astra` | `codex_auto_model_router_gpt6_astra_high` | `codex_auto_model_router_gpt6_astra_xhigh` | `codex_auto_model_router_gpt6_astra_max` |
 | GPT-6 Luna | `codex_auto_model_router_gpt6_luna_low` | `codex_auto_model_router_gpt6_luna` | `codex_auto_model_router_gpt6_luna_high` | `codex_auto_model_router_gpt6_luna_xhigh` | `codex_auto_model_router_gpt6_luna_max` |
 
 ## Apply (workspace-write executor)
@@ -14,6 +15,7 @@ Use a model-specific leaf only when the automatic benefit gate clears and the in
 | Model | low | medium | high | xhigh | max |
 |---|---|---|---|---|---|
 | GPT-6.1 Sol | `codex_auto_model_executor_gpt61_sol_low` | `codex_auto_model_executor_gpt61_sol` | `codex_auto_model_executor_gpt61_sol_high` | `codex_auto_model_executor_gpt61_sol_xhigh` | `codex_auto_model_executor_gpt61_sol_max` |
+| GPT-6 Astra | `codex_auto_model_executor_gpt6_astra_low` | `codex_auto_model_executor_gpt6_astra` | `codex_auto_model_executor_gpt6_astra_high` | `codex_auto_model_executor_gpt6_astra_xhigh` | `codex_auto_model_executor_gpt6_astra_max` |
 | GPT-6 Luna | `codex_auto_model_executor_gpt6_luna_low` | `codex_auto_model_executor_gpt6_luna` | `codex_auto_model_executor_gpt6_luna_high` | `codex_auto_model_executor_gpt6_luna_xhigh` | `codex_auto_model_executor_gpt6_luna_max` |
 
 The benefit-gated executor receives one bounded task and returns one final result. It reads applicable project instructions, performs only that task, and never delegates. In parallel plans, the Coordinator owns dependencies, write scopes, capacity, scheduling, failure handling, aggregation, and cleanup.

@@ -22,14 +22,14 @@ Use these drafts as starting points. Keep the final posts personal and answer ea
 
 > Version 2 is a reliability-focused redesign of Codex Auto Model Router. The original version taught me an uncomfortable lesson: a router that blocks the real work is worse than no router at all.
 >
-> - Selects only GPT-6.1 Sol or GPT-6 Luna. Luna handles mechanical through deep bounded work; Sol/low handles bounded complexity, with medium/high/xhigh for increased ambiguity, consequence, or classified reasoning failure. Sol/max is explicit-only, and Ultra disables Router-managed parallelism.
+> - Offers economy, balanced, and quality profiles across GPT-6 Luna, GPT-6.1 Sol, and GPT-6 Astra. Balanced preserves the existing lanes; quality uses Astra for high-consequence work and classified complex failures. Ultra disables Router-managed parallelism.
 > - Re-evaluates every applicable request instead of inheriting the previous route.
 > - Keeps sufficient work in the current coordinator; recommendations never claim to switch an already-running conversation's model or reasoning effort.
 > - Removes hashes, cursors, environment guards, blocking ledgers, and rebuilt envelopes from the default execution path.
 > - Runs independent safe tools or processes concurrently in the coordinator without creating child-agent UI entries.
 > - Automatically delegates, reuses, or applies multi-model agent parallelism when route benefit clearly exceeds bounded startup and aggregation overhead; no extra permission prompt is required.
 > - Supports `--no-subagents` as an explicit opt-out and retains bounded executor lifecycle, finalization, and reuse safeguards.
-> - Routes ordinary scans to Luna/high, large bounded scans to Luna/xhigh, deterministic deep work to Luna/max, ambiguous work to Sol, and high-consequence work to Astra.
+> - Provides economy, balanced, and quality profiles for Luna, Sol, and Astra, with customizable per-lane model and reasoning-effort overrides.
 > - Allows a Luna route to fall back to Sol at the same effort; Sol never downgrades to Luna. Retired model IDs and GPT-5.5 are rejected for routing, while historical records remain readable.
 > - Retains the `latency_priority` compatibility lane as Luna/max for cost/value; the dated Artificial Analysis comparison shows lower cost but slower completion than Terra/xhigh.
 > - Uses deterministic capability policy informed by a bounded current comparison, preserves historical benchmark snapshots, and keeps task evidence and supported user overrides primary.

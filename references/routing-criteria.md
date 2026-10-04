@@ -1,6 +1,6 @@
 # Routing criteria
 
-Choose a semantic task lane from the task evidence and resolve it through the two-model catalog. See [benchmark evidence](benchmark-evidence.md) for the supplied Artificial Analysis graph and its limits. The older GPT-5.6 snapshot is retained as history and does not calibrate these routes.
+Choose a semantic task lane from task evidence, then resolve it through the selected `economy`, `balanced`, or `quality` table and three-model catalog. `balanced` is the default and preserves the original table. See [benchmark evidence](benchmark-evidence.md) for the supplied Artificial Analysis graph and its limits. The older GPT-5.6 snapshot is retained as history and does not calibrate these routes.
 
 Assess and Retune default to GPT-6.1 Sol/high. Supported explicit model and effort overrides win. Recommendations remain advisory until execution is observed; the coordinator model stays fixed, and a routed leaf runs as a separate task.
 
@@ -15,16 +15,16 @@ Assess and Retune default to GPT-6.1 Sol/high. Supported explicit model and effo
 | latency_priority compatibility lane | GPT-6 Luna/max; cost/value choice, not a speed claim |
 | Bounded complex work | GPT-6.1 Sol/low |
 | High ambiguity or coupling | GPT-6.1 Sol/medium |
-| High-consequence work | GPT-6.1 Sol/high |
-| Classified reasoning or verification failure on complex work | GPT-6.1 Sol/xhigh |
+| High-consequence work | GPT-6.1 Sol/high in balanced; GPT-6 Astra/high in quality |
+| Classified reasoning or verification failure on complex work | GPT-6.1 Sol/xhigh in balanced; GPT-6 Astra/xhigh in quality |
 
 Sol/max remains available only by explicit override. Ultra is never automatic; explicit Ultra uses native orchestration and disables Router-managed parallelism. Luna does not support Ultra.
 
 ## Route validation and fallback
 
-The only routable IDs are gpt-6.1-sol and gpt-6-luna. The shorthand sol means GPT-6.1 Sol. Reject retired Astra and GPT-6 Sol IDs, GPT-5.6, and GPT-5.5 as route requests. Preserve historical names when reading prior ledger entries or coordinator metadata.
+The routable IDs are gpt-6-astra, gpt-6.1-sol, and gpt-6-luna. The shorthand `astra` means GPT-6 Astra and `sol` means GPT-6.1 Sol. Reject retired GPT-6 Sol, GPT-5.6, and GPT-5.5 as route requests. Preserve historical names when reading prior ledger entries or coordinator metadata.
 
-When Luna is unavailable, its lane may use Sol at the same effort. Sol routes never fall back to Luna. If Sol is unavailable, retain the preferred recommendation and follow the normal local fail-open behavior. GPT-5.5 is never an availability fallback. Unknown availability keeps the preferred route advisory.
+When Luna or Astra is unavailable, its lane may use Sol at the same effort. Sol routes never fall back to another model. If Sol is unavailable, retain the preferred recommendation and follow the normal local fail-open behavior. GPT-5.5 is never an availability fallback. Unknown availability keeps the preferred route advisory.
 
 ## Task signals
 
